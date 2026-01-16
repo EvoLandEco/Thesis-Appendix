@@ -1,0 +1,3540 @@
+---
+title: "R Markdown for Chapter 3 Figures, Publication Version"
+author: "Tianjian Qin"
+date: "10/12/2025"
+output: html_document
+---
+
+# Prepare the data and environment
+```{r}
+# Load the required libraries
+library(tidyverse)
+library(patchwork)
+library(nord)
+library(ggpointdensity)
+library(gridExtra)
+library(stringr)
+library(MASS)
+library(scales)
+library(ggh4x)
+library(minerva)
+library(ggridges)
+library(forcats)
+library(ggfittext)
+library(energy)
+library(ggrepel)
+library(ggtext)
+
+# Read the REGRESSION results
+result_path <- "/Users/tianjian/Library/CloudStorage/OneDrive-Persoonlijk/My/Data/05122024"
+
+plot_data <- NULL
+
+for (cplx in c(2, 4, 6)) {
+  cplx_label <- "null"
+  if (cplx == 2) {
+    cplx_label <- "low"
+  } else if (cplx == 4) {
+    cplx_label <- "medium"
+  } else if (cplx == 6) {
+    cplx_label <- "high"
+  }
+  full_path <- file.path(result_path, paste0("REG-", cplx, "-PARS"))
+
+  format_df <- function(x) {
+    # Convert col 1 to 37 to numeric
+    x[, 1:37] <- lapply(x[, 1:37], as.numeric)
+    # Convert label to factor, with levels 0 to pd, 1 to ed, 2 to nnd
+    x$label <- factor(x$label, levels = 0:2, labels = c("pd", "ed", "nnd"))
+    # Cut the num_nodes into 3 levels, Small: 0, 200; Medium: 200, 500; Large: 500+
+    x$Size <- cut(x$num_nodes, breaks = c(0, 200, 500, Inf), labels = c("Small", "Medium", "Large"))
+    return(x)
+  }
+
+  df_complete <- readRDS(file.path(full_path, "EVE_FREE_TES_gnn_3_lstm_compensation_all.rds"))
+  df_complete <- format_df(df_complete)
+  df_complete <- df_complete %>% mutate(cplx = cplx_label,
+                                        dataset = "complete")
+  plot_data <- bind_rows(plot_data, df_complete)
+  df_large <- readRDS(file.path(full_path, "EVE_FREE_TES_gnn_3_lstm_compensation_all_large.rds"))
+  df_large <- format_df(df_large)
+  df_large <- df_large %>% mutate(cplx = cplx_label,
+                                  dataset = "large")
+  plot_data <- bind_rows(plot_data, df_large)
+  df_medium <- readRDS(file.path(full_path, "EVE_FREE_TES_gnn_3_lstm_compensation_all_medium.rds"))
+  df_medium <- format_df(df_medium)
+  df_medium <- df_medium %>% mutate(cplx = cplx_label,
+                                    dataset = "medium")
+  plot_data <- bind_rows(plot_data, df_medium)
+  df_small <- readRDS(file.path(full_path, "EVE_FREE_TES_gnn_3_lstm_compensation_all_small.rds"))
+  df_small <- format_df(df_small)
+  df_small <- df_small %>% mutate(cplx = cplx_label,
+                                  dataset = "small")
+  plot_data <- bind_rows(plot_data, df_small)
+  df_pd <- readRDS(file.path(full_path, "EVE_FREE_TES_gnn_3_lstm_compensation_pd.rds"))
+  df_pd <- format_df(df_pd)
+  df_pd <- df_pd %>% mutate(cplx = cplx_label,
+                            dataset = "pd")
+  plot_data <- bind_rows(plot_data, df_pd)
+  df_ed <- readRDS(file.path(full_path, "EVE_FREE_TES_gnn_3_lstm_compensation_ed.rds"))
+  df_ed <- format_df(df_ed)
+  df_ed <- df_ed %>% mutate(cplx = cplx_label,
+                            dataset = "ed")
+  plot_data <- bind_rows(plot_data, df_ed)
+  df_nnd <- readRDS(file.path(full_path, "EVE_FREE_TES_gnn_3_lstm_compensation_nnd.rds"))
+  df_nnd <- format_df(df_nnd)
+  df_nnd <- df_nnd %>% mutate(cplx = cplx_label,
+                              dataset = "nnd")
+  plot_data <- bind_rows(plot_data, df_nnd)
+  df_misspec_pd <- readRDS(file.path(full_path, "EVE_FREE_TES_gnn_3_lstm_compensation_pretrained_pd.rds"))
+  df_misspec_pd <- format_df(df_misspec_pd)
+  df_misspec_pd <- df_misspec_pd %>% mutate(cplx = cplx_label,
+                                            dataset = "misspec_pd")
+  plot_data <- bind_rows(plot_data, df_misspec_pd)
+  df_misspec_ed <- readRDS(file.path(full_path, "EVE_FREE_TES_gnn_3_lstm_compensation_pretrained_ed.rds"))
+  df_misspec_ed <- format_df(df_misspec_ed)
+  df_misspec_ed <- df_misspec_ed %>% mutate(cplx = cplx_label,
+                                            dataset = "misspec_ed")
+  plot_data <- bind_rows(plot_data, df_misspec_ed)
+  df_misspec_nnd <- readRDS(file.path(full_path, "EVE_FREE_TES_gnn_3_lstm_compensation_pretrained_nnd.rds"))
+  df_misspec_nnd <- format_df(df_misspec_nnd)
+  df_misspec_nnd <- df_misspec_nnd %>% mutate(cplx = cplx_label,
+                                              dataset = "misspec_nnd")
+  plot_data <- bind_rows(plot_data, df_misspec_nnd)
+}
+
+# Set levels of cplx in plot_data
+plot_data$cplx <- factor(plot_data$cplx, levels = c("low", "medium", "high"))
+```
+
+Common constants for the plots:
+```{r}
+point_size = 1.0
+point_alpha = 1.0
+ggthemr::ggthemr("flat")
+```
+
+Figure Group 1 (Figure 2): Comparsion of performance between scenarios by complexity level. Current: net diversification rate.
+```{r}
+# Filter, then compute absolute error per row
+plot_data_fig1_1 <- plot_data %>%
+  filter(dataset == "complete") %>%
+  mutate(
+    error = abs((lambda - mu) -
+                  (pred_lambda_after - pred_mu_after))
+  )
+plot_data_fig1_2 <- plot_data %>%
+  filter(dataset == "pd" |
+           dataset == "ed" |
+           dataset == "nnd") %>%
+  mutate(
+    error = abs((lambda - mu) -
+                  (pred_lambda_after - pred_mu_after))
+  )
+
+plot_data_fig1_3 <- plot_data %>%
+  filter(dataset == "small" |
+           dataset == "medium" |
+           dataset == "large") %>%
+  mutate(
+    error = abs((lambda - mu) -
+                  (pred_lambda_after - pred_mu_after))
+  )
+
+abline_data_fig1_1 <- plot_data_fig1_1 %>%
+  group_by(cplx, dataset) %>%
+  summarize(mean_intercept_nd = mean(lambda - mu),
+            mean_intercept_beta_n = mean(beta_n),
+            mean_intercept_beta_phi = mean(beta_phi),
+            mean_intercept_gamma_n = mean(gamma_n),
+            mean_intercept_gamma_phi = mean(gamma_phi),
+            .groups = "drop")
+
+abline_data_fig1_2 <- plot_data_fig1_2 %>%
+  group_by(cplx, dataset) %>%
+  summarize(mean_intercept_nd = mean(lambda - mu),
+            mean_intercept_beta_n = mean(beta_n),
+            mean_intercept_beta_phi = mean(beta_phi),
+            mean_intercept_gamma_n = mean(gamma_n),
+            mean_intercept_gamma_phi = mean(gamma_phi),
+            .groups = "drop")
+
+abline_data_fig1_3 <- plot_data_fig1_3 %>%
+  group_by(cplx, dataset) %>%
+  summarize(mean_intercept_nd = mean(lambda - mu),
+            mean_intercept_beta_n = mean(beta_n),
+            mean_intercept_beta_phi = mean(beta_phi),
+            mean_intercept_gamma_n = mean(gamma_n),
+            mean_intercept_gamma_phi = mean(gamma_phi),
+            .groups = "drop")
+
+# Set levels of the dataset variable in plot_data_fig1_2
+plot_data_fig1_2$dataset <- factor(plot_data_fig1_2$dataset, levels = c("pd", "ed", "nnd"))
+plot_data_fig1_3$dataset <- factor(plot_data_fig1_3$dataset, levels = c("small", "medium", "large"))
+abline_data_fig1_2$dataset <- factor(abline_data_fig1_2$dataset, levels = c("pd", "ed", "nnd"))
+abline_data_fig1_3$dataset <- factor(abline_data_fig1_3$dataset, levels = c("small", "medium", "large"))
+
+# Summarize by facet variables (cplx, label) and Size
+errors_fig1_1 <- plot_data_fig1_1 %>%
+  group_by(cplx, label, Size) %>%
+  summarise(mean_error = mean(error), .groups = "drop")
+
+# Pivot so that each Size becomes a separate column
+errors_fig1_1_wide <- errors_fig1_1 %>%
+  pivot_wider(
+    names_from = Size,
+    values_from = mean_error
+  ) %>%
+  mutate(
+    label_text = paste0(
+      "italic(e)[S] == ", round(Small, 3),
+      " ~ italic(e)[M] == ", round(Medium, 3),
+      " ~ italic(e)[L] == ", round(Large, 3)
+    )
+  )
+
+errors_fig1_2 <- plot_data_fig1_2 %>%
+  group_by(cplx, dataset, Size) %>%
+  summarise(mean_error = mean(error), .groups = "drop")
+
+errors_fig1_2_wide <- errors_fig1_2 %>%
+  pivot_wider(
+    names_from = Size,
+    values_from = mean_error
+  ) %>%
+  mutate(
+    label_text = paste0(
+      "italic(e)[S] == ", round(Small, 3),
+      " ~ italic(e)[M] == ", round(Medium, 3),
+      " ~ italic(e)[L] == ", round(Large, 3)
+    )
+  )
+
+# Pre-define themes for left, middle, and right plots
+theme_all <- theme(aspect.ratio = 1,
+                   axis.text.x = element_text(angle = 45, hjust = 1))
+
+# ggplot2 labeller to convert facet strips to upper case
+facet_labeller <- labeller(
+  cplx = toupper,
+  label = toupper,
+  dataset = toupper,
+  Size = toupper
+)
+
+get_density <- function(x, y, n = 100) {
+  dens <- MASS::kde2d(x, y, n = n)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  dens$z[cbind(ix, iy)]
+}
+
+plot_data_fig1_1 <- plot_data_fig1_1 %>%
+  group_by(cplx, Size) %>%
+  mutate(
+    density = get_density(lambda - mu,
+                          lambda - pred_lambda_after - mu + pred_mu_after),
+    local_density = rescale(density, to = c(0, 1)) 
+  ) %>%
+  ungroup()
+
+plot_data_fig1_3 <- plot_data_fig1_3 %>%
+  group_by(cplx, dataset) %>% 
+  mutate(
+    density = get_density(lambda - mu,
+                          lambda - pred_lambda_after - mu + pred_mu_after),
+    local_density = rescale(density, to = c(0, 1))
+  ) %>%
+  ungroup()
+
+plot_fig1_1 <- ggplot(plot_data_fig1_1 %>% arrange(Size)) +
+  geom_point(aes(lambda - mu, lambda - pred_lambda_after - mu + pred_mu_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_nd, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab(expression("Prediction error")) +
+  xlab(expression("True value " * (italic(lambda)[0] - italic(mu)[0]))) +
+  ggtitle("Trained on complete data (shown by scenario)") +
+  theme_all
+
+plot_fig1_3 <- ggplot(plot_data_fig1_2 %>% arrange(Size)) +
+  geom_point(aes(lambda - mu, lambda - pred_lambda_after - mu + pred_mu_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(data = abline_data_fig1_2,
+              aes(intercept = -mean_intercept_nd, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab(expression("Prediction error")) +
+  xlab(expression("True value " * (italic(lambda)[0] - italic(mu)[0]))) +
+  ggtitle("Trained on partial data (per scenario)") +
+  theme_all
+
+plot_fig1_2 <- ggplot(plot_data_fig1_1 %>% arrange(label)) +
+  geom_point(aes(lambda - mu, lambda - pred_lambda_after - mu + pred_mu_after, color = label),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ Size, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_nd, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  ylab(expression("Prediction error")) +
+  xlab(expression("True value " * (italic(lambda)[0] - italic(mu)[0]))) +
+  ggtitle("Trained on complete data (shown by size)") +
+  theme_all
+
+plot_fig1_4 <- ggplot(plot_data_fig1_3 %>% arrange(label)) +
+  geom_point(aes(lambda - mu, lambda - pred_lambda_after - mu + pred_mu_after, color = label),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(data = abline_data_fig1_3,
+              aes(intercept = -mean_intercept_nd, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  ylab(expression("Prediction error")) +
+  xlab(expression("True value " * (italic(lambda)[0] - italic(mu)[0]))) +
+  ggtitle("Trained on partial data (per size)") +
+  theme_all
+
+plot_output_comp_nd <- plot_fig1_1 +
+  plot_fig1_2 +
+  plot_fig1_3 +
+  plot_fig1_4 +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect", byrow = F) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_comp_nd
+
+plot_fig1_1 <- ggplot(plot_data_fig1_1 %>% arrange(Size)) +
+  geom_point(aes(lambda - mu,
+                 lambda - pred_lambda_after - mu + pred_mu_after,
+                 color = Size),
+             size = point_size, alpha = point_alpha) +
+  ggside::geom_xsidedensity(
+    aes(x = lambda - mu, fill = Size),
+    color = "gray60", alpha = 0.35, show.legend = FALSE
+  ) +
+  ggside::geom_ysidedensity(
+    aes(y = lambda - pred_lambda_after - mu + pred_mu_after, fill = Size),
+    color = "gray60", alpha = 0.35, show.legend = FALSE
+  ) +
+  guides(fill = "none") +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_nd, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab(expression("Prediction error")) +
+  xlab(expression("True value " * (italic(lambda)[0] - italic(mu)[0]))) +
+  ggtitle("Trained on complete data (shown by scenario)") +
+  theme_all +
+  theme_ggside_minimal() +
+  theme(
+    ggside.panel.scale.x = 0.22,
+    ggside.panel.scale.y = 0.22,
+    ggside.axis.text.x   = element_blank(),
+    ggside.axis.text.y   = element_blank()
+  )
+
+plot_fig1_3 <- ggplot(plot_data_fig1_2 %>% arrange(Size)) +
+  geom_point(aes(lambda - mu,
+                 lambda - pred_lambda_after - mu + pred_mu_after,
+                 color = Size),
+             size = point_size, alpha = point_alpha) +
+  ggside::geom_xsidedensity(
+    aes(x = lambda - mu, fill = Size),
+    color = "gray60", alpha = 0.35, show.legend = FALSE
+  ) +
+  ggside::geom_ysidedensity(
+    aes(y = lambda - pred_lambda_after - mu + pred_mu_after, fill = Size),
+    color = "gray60", alpha = 0.35, show.legend = FALSE
+  ) +
+  guides(fill = "none") +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(data = abline_data_fig1_2,
+              aes(intercept = -mean_intercept_nd, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab(expression("Prediction error")) +
+  xlab(expression("True value " * (italic(lambda)[0] - italic(mu)[0]))) +
+  ggtitle("Trained on partial data (per scenario)") +
+  theme_all +
+  theme_ggside_minimal() +
+  theme(
+    ggside.panel.scale.x = 0.22,
+    ggside.panel.scale.y = 0.22,
+    ggside.axis.text.x   = element_blank(),
+    ggside.axis.text.y   = element_blank()
+  )
+
+plot_fig1_2 <- ggplot(plot_data_fig1_1 %>% arrange(label)) +
+  geom_point(aes(lambda - mu,
+                 lambda - pred_lambda_after - mu + pred_mu_after,
+                 color = label),
+             size = point_size, alpha = point_alpha) +
+  ggside::geom_xsidedensity(
+    aes(x = lambda - mu, fill = label),
+    color = "gray60", alpha = 0.35, show.legend = FALSE
+  ) +
+  ggside::geom_ysidedensity(
+    aes(y = lambda - pred_lambda_after - mu + pred_mu_after, fill = label),
+    color = "gray60", alpha = 0.35, show.legend = FALSE
+  ) +
+  scale_fill_manual(values = c("#ffe990", "#7381f1", "#f59999")) +
+  guides(fill = "none") +
+  facet_grid(cplx ~ Size, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_nd, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  ylab(expression("Prediction error")) +
+  xlab(expression("True value " * (italic(lambda)[0] - italic(mu)[0]))) +
+  ggtitle("Trained on complete data (shown by size)") +
+  theme_all +
+  theme_ggside_minimal() +
+  theme(
+    ggside.panel.scale.x = 0.22,
+    ggside.panel.scale.y = 0.22,
+    ggside.axis.text.x   = element_blank(),
+    ggside.axis.text.y   = element_blank()
+  )
+
+plot_fig1_4 <- ggplot(plot_data_fig1_3 %>% arrange(label)) +
+  geom_point(aes(lambda - mu,
+                 lambda - pred_lambda_after - mu + pred_mu_after,
+                 color = label),
+             size = point_size, alpha = point_alpha) +
+  ggside::geom_xsidedensity(
+    aes(x = lambda - mu, fill = label),
+    color = "gray60", alpha = 0.35, show.legend = FALSE
+  ) +
+  ggside::geom_ysidedensity(
+    aes(y = lambda - pred_lambda_after - mu + pred_mu_after, fill = label),
+    color = "gray60", alpha = 0.35, show.legend = FALSE
+  ) +
+  scale_fill_manual(values = c("#ffe990", "#7381f1", "#f59999")) +
+  guides(fill = "none") +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(data = abline_data_fig1_3,
+              aes(intercept = -mean_intercept_nd, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  ylab(expression("Prediction error")) +
+  xlab(expression("True value " * (italic(lambda)[0] - italic(mu)[0]))) +
+  ggtitle("Trained on partial data (per size)") +
+  theme_all +
+  theme_ggside_minimal() +
+  theme(
+    ggside.panel.scale.x = 0.22,
+    ggside.panel.scale.y = 0.22,
+    ggside.axis.text.x   = element_blank(),
+    ggside.axis.text.y   = element_blank()
+  )
+
+plot_output_comp_nd <- plot_fig1_1 +
+  plot_fig1_2 +
+  plot_fig1_3 +
+  plot_fig1_4 +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect", byrow = FALSE) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+# Build x/y, keep only finite rows
+mk_xy <- function(df) {
+  df %>%
+    mutate(
+      x = (lambda - mu),
+      y = (lambda - pred_lambda_after) - (mu - pred_mu_after)  # = (λ-μ) - (λ̂-μ̂)
+    ) %>%
+    filter(is.finite(x), is.finite(y))
+}
+
+# Prune groups that can't support KDE
+prune_for_kde <- function(df, facet_cols, color_col, min_n = 10) {
+  grp_cols <- c(facet_cols, color_col)
+  df %>%
+    group_by(across(all_of(grp_cols))) %>%
+    filter(
+      n() >= min_n,
+      sd(x) > 0, sd(y) > 0,
+      dplyr::n_distinct(x) >= 3,
+      dplyr::n_distinct(y) >= 3
+    ) %>%
+    ungroup()
+}
+
+density2d_lines <- function(...) {
+  stat_density_2d(
+    ...,
+    bins = 8,
+    adjust = 1,
+    contour_var = "ndensity",
+    na.rm = TRUE,
+    linewidth = 0.5
+  )
+}
+
+# Prepare the data splits
+
+pd1 <- plot_data_fig1_1 |> mk_xy() 
+pd2 <- plot_data_fig1_2 |> mk_xy()
+pd3 <- plot_data_fig1_3 |> mk_xy()
+
+# Prune per panel/group
+pd1a <- prune_for_kde(pd1, facet_cols = c("cplx","label"),   color_col = "Size",   min_n = 10)
+pd1b <- prune_for_kde(pd1, facet_cols = c("cplx","Size"),    color_col = "label",  min_n = 10)
+pd2a <- prune_for_kde(pd2, facet_cols = c("cplx","dataset"), color_col = "Size",   min_n = 10)
+pd3a <- prune_for_kde(pd3, facet_cols = c("cplx","dataset"), color_col = "label",  min_n = 10)
+
+# Contour plots
+
+plot_fig1_1_cnt <- ggplot(pd1a, aes(x = x, y = y)) +
+  density2d_lines(aes(color = Size)) +
+  facet_grid(cplx ~ label, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(data = abline_data_fig1_1, aes(intercept = -mean_intercept_nd, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab(expression("Prediction error")) +
+  xlab(expression("True value " * (italic(lambda)[0] - italic(mu)[0]))) +
+  ggtitle("Trained on complete data (shown by scenario)") +
+  theme_all
+
+plot_fig1_2_cnt <- ggplot(pd1b, aes(x = x, y = y)) +
+  density2d_lines(aes(color = label)) +
+  facet_grid(cplx ~ Size, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(data = abline_data_fig1_1, aes(intercept = -mean_intercept_nd, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"),
+                     labels = c("PD", "ED", "NND")) +
+  ylab(expression("Prediction error")) +
+  xlab(expression("True value " * (italic(lambda)[0] - italic(mu)[0]))) +
+  ggtitle("Trained on complete data (shown by size)") +
+  theme_all
+
+plot_fig1_3_cnt <- ggplot(pd2a, aes(x = x, y = y)) +
+  density2d_lines(aes(color = Size)) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(data = abline_data_fig1_2, aes(intercept = -mean_intercept_nd, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab(expression("Prediction error")) +
+  xlab(expression("True value " * (italic(lambda)[0] - italic(mu)[0]))) +
+  ggtitle("Trained on partial data (per scenario)") +
+  theme_all
+
+plot_fig1_4_cnt <- ggplot(pd3a, aes(x = x, y = y)) +
+  density2d_lines(aes(color = label)) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(data = abline_data_fig1_3, aes(intercept = -mean_intercept_nd, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"),
+                     labels = c("PD", "ED", "NND")) +
+  ylab(expression("Prediction error")) +
+  xlab(expression("True value " * (italic(lambda)[0] - italic(mu)[0]))) +
+  ggtitle("Trained on partial data (per size)") +
+  theme_all
+
+plot_output_comp_nd_cnt <- plot_fig1_1_cnt +
+  plot_fig1_2_cnt +
+  plot_fig1_3_cnt +
+  plot_fig1_4_cnt +
+  patchwork::plot_layout(ncol = 2, axis_titles = "collect", guides = "collect", byrow = FALSE) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_comp_nd_cnt
+
+
+```
+
+Figure Group 1: Comparsion of performance between scenarios by complexity level. Current: species richness effect on speciation rate (beta_N).
+
+```{r}
+plot_fig1_5 <- ggplot(plot_data_fig1_1) +
+  geom_point(aes(beta_n, beta_n - pred_beta_n_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_beta_n, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(beta)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by scenario)") +
+  theme_all
+
+plot_fig1_6 <- ggplot(plot_data_fig1_1) +
+  geom_point(aes(beta_n, beta_n - pred_beta_n_after, color = label),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ Size, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_beta_n, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(beta)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by size)") +
+  theme_all
+
+plot_fig1_7 <- ggplot(plot_data_fig1_2) +
+  geom_point(aes(beta_n, beta_n - pred_beta_n_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_2,
+              aes(intercept = -mean_intercept_beta_n, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(beta)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per scenario)") +
+  theme_all
+
+plot_fig1_8 <- ggplot(plot_data_fig1_3) +
+  geom_point(aes(beta_n, beta_n - pred_beta_n_after, color = label),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_3,
+              aes(intercept = -mean_intercept_beta_n, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(beta)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per size)") +
+  theme_all
+
+plot_output_comp_beta_n <- plot_fig1_5 +
+  plot_fig1_6 +
+  plot_fig1_7 +
+  plot_fig1_8 +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect", byrow = F) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_comp_beta_n
+
+# contour version
+beta1 <- plot_data_fig1_1 %>%
+  mutate(x = beta_n, y = beta_n - pred_beta_n_after) %>%
+  filter(is.finite(x), is.finite(y))
+
+beta2 <- plot_data_fig1_2 %>%
+  mutate(x = beta_n, y = beta_n - pred_beta_n_after) %>%
+  filter(is.finite(x), is.finite(y))
+
+beta3 <- plot_data_fig1_3 %>%
+  mutate(x = beta_n, y = beta_n - pred_beta_n_after) %>%
+  filter(is.finite(x), is.finite(y))
+
+beta1_a <- prune_for_kde(beta1, facet_cols = c("cplx","label"),   color_col = "Size",   min_n = 10)
+beta1_b <- prune_for_kde(beta1, facet_cols = c("cplx","Size"),    color_col = "label",  min_n = 10)
+beta2_a <- prune_for_kde(beta2, facet_cols = c("cplx","dataset"), color_col = "Size",   min_n = 10)
+beta3_a <- prune_for_kde(beta3, facet_cols = c("cplx","dataset"), color_col = "label",  min_n = 10)
+
+plot_fig1_5_cnt <- ggplot(beta1_a, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = Size),
+                  bins = 8, adjust = 1, contour_var = "ndensity",
+                  linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ label, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_beta_n, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(beta)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by scenario)") +
+  theme_all
+
+plot_fig1_6_cnt <- ggplot(beta1_b, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = label),
+                  bins = 8, adjust = 1, contour_var = "ndensity",
+                  linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ Size, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_beta_n, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn",
+                     values = c("#ffe990", "#7381f1", "#f59999"),
+                     labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(beta)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by size)") +
+  theme_all
+
+plot_fig1_7_cnt <- ggplot(beta2_a, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = Size),
+                  bins = 8, adjust = 1, contour_var = "ndensity",
+                  linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_2,
+              aes(intercept = -mean_intercept_beta_n, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(beta)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per scenario)") +
+  theme_all
+
+
+plot_fig1_8_cnt <- ggplot(beta3_a, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = label),
+                  bins = 8, adjust = 1, contour_var = "ndensity",
+                  linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_3,
+              aes(intercept = -mean_intercept_beta_n, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn",
+                     values = c("#ffe990", "#7381f1", "#f59999"),
+                     labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(beta)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per size)") +
+  theme_all
+
+plot_output_comp_beta_n_cnt <-
+  plot_fig1_5_cnt + plot_fig1_6_cnt + plot_fig1_7_cnt + plot_fig1_8_cnt +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect", byrow = FALSE) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_comp_beta_n_cnt
+
+```
+
+Figure Group 1: Comparsion of performance between scenarios by complexity level. Current: evolutionary relatedness effect on speciation rate (beta_Phi).
+
+```{r}
+plot_fig1_9 <- ggplot(plot_data_fig1_1) +
+  geom_point(aes(beta_phi, beta_phi - pred_beta_phi_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.07, 0.07)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_beta_phi, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(beta)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by scenario)") +
+  theme_all
+
+plot_fig1_10 <- ggplot(plot_data_fig1_1) +
+  geom_point(aes(beta_phi, beta_phi - pred_beta_phi_after, color = label),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ Size, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.07, 0.07)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_beta_phi, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(beta)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by size)") +
+  theme_all
+
+plot_fig1_11 <- ggplot(plot_data_fig1_2) +
+  geom_point(aes(beta_phi, beta_phi - pred_beta_phi_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.07, 0.07)) +
+  geom_abline(data = abline_data_fig1_2,
+              aes(intercept = -mean_intercept_beta_phi, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(beta)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per scenario)") +
+  theme_all
+
+plot_fig1_12 <- ggplot(plot_data_fig1_3) +
+  geom_point(aes(beta_phi, beta_phi - pred_beta_phi_after, color = label),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.07, 0.07)) +
+  geom_abline(data = abline_data_fig1_3,
+              aes(intercept = -mean_intercept_beta_phi, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(beta)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per size)") +
+  theme_all
+
+plot_output_comp_beta_phi <- plot_fig1_9 +
+  plot_fig1_10 +
+  plot_fig1_11 +
+  plot_fig1_12 +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect", byrow = F) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_comp_beta_phi
+
+# contour version
+bphi1 <- plot_data_fig1_1 %>% mutate(x = beta_phi, y = beta_phi - pred_beta_phi_after) %>% filter(is.finite(x), is.finite(y))
+bphi2 <- plot_data_fig1_2 %>% mutate(x = beta_phi, y = beta_phi - pred_beta_phi_after) %>% filter(is.finite(x), is.finite(y))
+bphi3 <- plot_data_fig1_3 %>% mutate(x = beta_phi, y = beta_phi - pred_beta_phi_after) %>% filter(is.finite(x), is.finite(y))
+
+bphi1_a <- prune_for_kde(bphi1, facet_cols = c("cplx","label"),   color_col = "Size",  min_n = 10)
+bphi1_b <- prune_for_kde(bphi1, facet_cols = c("cplx","Size"),    color_col = "label", min_n = 10)
+bphi2_a <- prune_for_kde(bphi2, facet_cols = c("cplx","dataset"), color_col = "Size",  min_n = 10)
+bphi3_a <- prune_for_kde(bphi3, facet_cols = c("cplx","dataset"), color_col = "label", min_n = 10)
+
+plot_fig1_9_cnt <- ggplot(bphi1_a, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = Size), bins = 8, adjust = 1, contour_var = "ndensity", linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ label, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.07, 0.07)) +
+  geom_abline(data = abline_data_fig1_1, aes(intercept = -mean_intercept_beta_phi, slope = 1), color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(beta)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by scenario)") +
+  theme_all
+
+plot_fig1_10_cnt <- ggplot(bphi1_b, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = label), bins = 8, adjust = 1, contour_var = "ndensity", linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ Size, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.07, 0.07)) +
+  geom_abline(data = abline_data_fig1_1, aes(intercept = -mean_intercept_beta_phi, slope = 1), color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(beta)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by size)") +
+  theme_all
+
+plot_fig1_11_cnt <- ggplot(bphi2_a, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = Size), bins = 8, adjust = 1, contour_var = "ndensity", linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.07, 0.07)) +
+  geom_abline(data = abline_data_fig1_2, aes(intercept = -mean_intercept_beta_phi, slope = 1), color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(beta)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per scenario)") +
+  theme_all
+
+plot_fig1_12_cnt <- ggplot(bphi3_a, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = label), bins = 8, adjust = 1, contour_var = "ndensity", linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.07, 0.07)) +
+  geom_abline(data = abline_data_fig1_3, aes(intercept = -mean_intercept_beta_phi, slope = 1), color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(beta)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per size)") +
+  theme_all
+
+plot_output_comp_beta_phi_cnt <- plot_fig1_9_cnt +
+  plot_fig1_10_cnt +
+  plot_fig1_11_cnt +
+  plot_fig1_12_cnt +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect", byrow = FALSE) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_comp_beta_phi_cnt
+
+```
+
+Figure Group 1: Comparsion of performance between scenarios by complexity level. Current: species richness effect on extinction rate (gamma_N).
+
+```{r}
+plot_fig1_13 <- ggplot(plot_data_fig1_1) +
+  geom_point(aes(gamma_n, gamma_n - pred_gamma_n_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_gamma_n, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(gamma)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by scenario)") +
+  theme_all
+
+plot_fig1_14 <- ggplot(plot_data_fig1_1) +
+  geom_point(aes(gamma_n, gamma_n - pred_gamma_n_after, color = label),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ Size, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_gamma_n, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(gamma)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by size)") +
+  theme_all
+
+plot_fig1_15 <- ggplot(plot_data_fig1_2) +
+  geom_point(aes(gamma_n, gamma_n - pred_gamma_n_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_2,
+              aes(intercept = -mean_intercept_gamma_n, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(gamma)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per scenario)") +
+  theme_all
+
+plot_fig1_16 <- ggplot(plot_data_fig1_3) +
+  geom_point(aes(gamma_n, gamma_n - pred_gamma_n_after, color = label),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_3,
+              aes(intercept = -mean_intercept_gamma_n, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(gamma)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per size)") +
+  theme_all
+
+plot_output_comp_gamma_n <- plot_fig1_13 +
+  plot_fig1_14 +
+  plot_fig1_15 +
+  plot_fig1_16 +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect", byrow = F) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_comp_gamma_n
+
+# contour version
+gamma1 <- plot_data_fig1_1 %>% mutate(x = gamma_n, y = gamma_n - pred_gamma_n_after) %>% filter(is.finite(x), is.finite(y))
+gamma2 <- plot_data_fig1_2 %>% mutate(x = gamma_n, y = gamma_n - pred_gamma_n_after) %>% filter(is.finite(x), is.finite(y))
+gamma3 <- plot_data_fig1_3 %>% mutate(x = gamma_n, y = gamma_n - pred_gamma_n_after) %>% filter(is.finite(x), is.finite(y))
+
+gamma1_a <- prune_for_kde(gamma1, facet_cols = c("cplx","label"),   color_col = "Size",  min_n = 10)
+gamma1_b <- prune_for_kde(gamma1, facet_cols = c("cplx","Size"),    color_col = "label", min_n = 10)
+gamma2_a <- prune_for_kde(gamma2, facet_cols = c("cplx","dataset"), color_col = "Size",  min_n = 10)
+gamma3_a <- prune_for_kde(gamma3, facet_cols = c("cplx","dataset"), color_col = "label", min_n = 10)
+
+plot_fig1_13_cnt <- ggplot(gamma1_a, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = Size), bins = 8, adjust = 1, contour_var = "ndensity", linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ label, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_1, aes(intercept = -mean_intercept_gamma_n, slope = 1), color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(gamma)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by scenario)") +
+  theme_all
+
+plot_fig1_14_cnt <- ggplot(gamma1_b, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = label), bins = 8, adjust = 1, contour_var = "ndensity", linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ Size, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_1, aes(intercept = -mean_intercept_gamma_n, slope = 1), color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(gamma)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by size)") +
+  theme_all
+
+plot_fig1_15_cnt <- ggplot(gamma2_a, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = Size), bins = 8, adjust = 1, contour_var = "ndensity", linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_2, aes(intercept = -mean_intercept_gamma_n, slope = 1), color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(gamma)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per scenario)") +
+  theme_all
+
+plot_fig1_16_cnt <- ggplot(gamma3_a, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = label), bins = 8, adjust = 1, contour_var = "ndensity", linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(data = abline_data_fig1_3, aes(intercept = -mean_intercept_gamma_n, slope = 1), color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(gamma)[N]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per size)") +
+  theme_all
+
+plot_output_comp_gamma_n_cnt <- plot_fig1_13_cnt +
+  plot_fig1_14_cnt +
+  plot_fig1_15_cnt +
+  plot_fig1_16_cnt +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect", byrow = FALSE) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_comp_gamma_n_cnt
+
+```
+
+Figure Group 1: Comparsion of performance between scenarios by complexity level. Current: evolutionary relatedness effect on extinction rate (gamma_Phi).
+
+```{r}
+plot_fig1_17 <- ggplot(plot_data_fig1_1) +
+  geom_point(aes(gamma_phi, gamma_phi - pred_gamma_phi_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.003, 0.003)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_gamma_phi, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(gamma)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by scenario)") +
+  theme_all
+
+plot_fig1_18 <- ggplot(plot_data_fig1_1) +
+  geom_point(aes(gamma_phi, gamma_phi - pred_gamma_phi_after, color = label),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ Size, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.003, 0.003)) +
+  geom_abline(data = abline_data_fig1_1,
+              aes(intercept = -mean_intercept_gamma_phi, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(gamma)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by size)") +
+  theme_all
+
+plot_fig1_19 <- ggplot(plot_data_fig1_2) +
+  geom_point(aes(gamma_phi, gamma_phi - pred_gamma_phi_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.003, 0.003)) +
+  geom_abline(data = abline_data_fig1_2,
+              aes(intercept = -mean_intercept_gamma_phi, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(gamma)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per scenario)") +
+  theme_all
+
+plot_fig1_20 <- ggplot(plot_data_fig1_3) +
+  geom_point(aes(gamma_phi, gamma_phi - pred_gamma_phi_after, color = label),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.003, 0.003)) +
+  geom_abline(data = abline_data_fig1_3,
+              aes(intercept = -mean_intercept_gamma_phi, slope = 1),
+              color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(gamma)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per size)") +
+  theme_all
+
+plot_output_comp_gamma_phi <- plot_fig1_17 +
+  plot_fig1_18 +
+  plot_fig1_19 +
+  plot_fig1_20 +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect", byrow = F) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_comp_gamma_phi
+
+# contour version
+gphi1 <- plot_data_fig1_1 %>% mutate(x = gamma_phi, y = gamma_phi - pred_gamma_phi_after) %>% filter(is.finite(x), is.finite(y))
+gphi2 <- plot_data_fig1_2 %>% mutate(x = gamma_phi, y = gamma_phi - pred_gamma_phi_after) %>% filter(is.finite(x), is.finite(y))
+gphi3 <- plot_data_fig1_3 %>% mutate(x = gamma_phi, y = gamma_phi - pred_gamma_phi_after) %>% filter(is.finite(x), is.finite(y))
+
+gphi1_a <- prune_for_kde(gphi1, facet_cols = c("cplx","label"),   color_col = "Size",  min_n = 10)
+gphi1_b <- prune_for_kde(gphi1, facet_cols = c("cplx","Size"),    color_col = "label", min_n = 10)
+gphi2_a <- prune_for_kde(gphi2, facet_cols = c("cplx","dataset"), color_col = "Size",  min_n = 10)
+gphi3_a <- prune_for_kde(gphi3, facet_cols = c("cplx","dataset"), color_col = "label", min_n = 10)
+
+plot_fig1_17_cnt <- ggplot(gphi1_a, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = Size), bins = 8, adjust = 1, contour_var = "ndensity", linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ label, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.003, 0.003)) +
+  geom_abline(data = abline_data_fig1_1, aes(intercept = -mean_intercept_gamma_phi, slope = 1), color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(gamma)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by scenario)") +
+  theme_all
+
+plot_fig1_18_cnt <- ggplot(gphi1_b, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = label), bins = 8, adjust = 1, contour_var = "ndensity", linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ Size, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.003, 0.003)) +
+  geom_abline(data = abline_data_fig1_1, aes(intercept = -mean_intercept_gamma_phi, slope = 1), color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(gamma)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on complete data (shown by size)") +
+  theme_all
+
+plot_fig1_19_cnt <- ggplot(gphi2_a, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = Size), bins = 8, adjust = 1, contour_var = "ndensity", linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.003, 0.003)) +
+  geom_abline(data = abline_data_fig1_2, aes(intercept = -mean_intercept_gamma_phi, slope = 1), color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(gamma)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per scenario)") +
+  theme_all
+
+plot_fig1_20_cnt <- ggplot(gphi3_a, aes(x = x, y = y)) +
+  stat_density_2d(aes(color = label), bins = 8, adjust = 1, contour_var = "ndensity", linewidth = 0.5, na.rm = TRUE) +
+  facet_grid(cplx ~ dataset, labeller = facet_labeller, drop = TRUE) +
+  coord_cartesian(ylim = c(-0.003, 0.003)) +
+  geom_abline(data = abline_data_fig1_3, aes(intercept = -mean_intercept_gamma_phi, slope = 1), color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"), labels = c("PD", "ED", "NND")) +
+  xlab(expression("True value " * (italic(gamma)[Phi]))) +
+  ylab("Prediction error") +
+  ggtitle("Trained on partial data (per size)") +
+  theme_all
+
+plot_output_comp_gamma_phi_cnt <- plot_fig1_17_cnt +
+  plot_fig1_18_cnt +
+  plot_fig1_19_cnt +
+  plot_fig1_20_cnt +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect", byrow = FALSE) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_comp_gamma_phi_cnt
+
+```
+
+Figure Group 1-2: Metrics of error and alignment with sample mean.
+```{r}
+generate_alignment_figure_from_list <- function(input_list, var, plot_line_type = "solid") {
+  facet_labeller <- labeller(
+    cplx = toupper,
+    label = toupper,
+    Size = toupper
+  )
+
+  summary_list <- lapply(names(input_list), function(nm) {
+    df <- input_list[[nm]]
+
+    if (var == "nd") {
+      # x = lambda - mu, y = lambda - pred_lambda_after - mu + pred_mu_after
+      df_work <- df %>%
+        mutate(
+          x = lambda - mu,
+          y = lambda - pred_lambda_after - mu + pred_mu_after
+        )
+    } else if (var == "beta_n") {
+      # x = beta_n, y = beta_n - pred_beta_n_after
+      df_work <- df %>%
+        mutate(
+          x = beta_n,
+          y = beta_n - pred_beta_n_after
+        )
+    } else if (var == "beta_phi") {
+      # x = beta_phi, y = beta_phi - pred_beta_phi_after
+      df_work <- df %>%
+        mutate(
+          x = beta_phi,
+          y = beta_phi - pred_beta_phi_after
+        )
+    } else if (var == "gamma_n") {
+      # x = gamma_n, y = gamma_n - pred_gamma_n_after
+      df_work <- df %>%
+        mutate(
+          x = gamma_n,
+          y = gamma_n - pred_gamma_n_after
+        )
+    } else if (var == "gamma_phi") {
+      # x = gamma_phi, y = gamma_phi - pred_gamma_phi_after
+      df_work <- df %>%
+        mutate(
+          x = gamma_phi,
+          y = gamma_phi - pred_gamma_phi_after
+        )
+    } else {
+      stop("Invalid variable name. Must be one of 'nd', 'beta_n', 'beta_phi', 'gamma_n', 'gamma_phi'.")
+    }
+
+    df_summary <- df_work %>%
+      group_by(cplx, label, Size) %>%
+      do({
+        if (nrow(.) < 5) {
+          data.frame(
+            mean_x = NA,
+            mean_perp_distance = NA,
+            intercept_est = NA,
+            slope_est = NA,
+            r_squared = NA,
+            slope_diff = NA,
+            dcor = NA,
+            mean_abs_error = NA,
+            spearman = NA
+          )
+        } else {
+          mean_x_val <- mean(.$x, na.rm = TRUE)
+          mean_perp_distance <- mean(abs(.$y - (.$x - mean_x_val)) / sqrt(2), na.rm = TRUE)
+
+          mod <- lm(y ~ x, data = .)
+          coefs <- coef(mod)
+          r_squared <- summary(mod)$r.squared
+          slope_diff <- coefs[2] - 1
+          dcor_val <- dcor(.$x, .$y)
+          mean_abs_error <- mean(abs(.$y), na.rm = TRUE)
+          spearman_val <- tryCatch(cor(.$x, .$y, method = "spearman", use = "complete.obs"),
+                                   error = function(e) NA)
+
+          data.frame(
+            mean_x = mean_x_val,
+            mean_perp_distance = mean_perp_distance,
+            intercept_est = coefs[1],
+            slope_est = coefs[2],
+            r_squared = r_squared,
+            slope_diff = slope_diff,
+            dcor = dcor_val,
+            mean_abs_error = mean_abs_error,
+            spearman = spearman_val
+          )
+        }
+      }) %>%
+      ungroup() %>%
+      mutate(Data = nm)
+
+    return(df_summary)
+  })
+
+  combined_summary <- bind_rows(summary_list)
+  combined_summary$Size <- as.factor(combined_summary$Size)
+
+  pos_dodge <- position_dodge(width = 0.9)
+
+  theme_align <- theme(
+    panel.grid = element_blank(),
+    panel.background = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    aspect.ratio = 1 / 2
+  )
+
+  p_perp <- ggplot(combined_summary,
+                   aes(x = Size, y = mean_perp_distance, color = Size, shape = Data, group = Data)) +
+    geom_errorbar(aes(ymin = 0, ymax = mean_perp_distance),
+                  linetype = plot_line_type, position = pos_dodge, width = 0, na.rm = TRUE) +
+    geom_point(position = pos_dodge, size = 3, na.rm = TRUE) +
+    facet_grid2(cplx ~ label, labeller = facet_labeller, axes = "x", remove_labels = TRUE, scales = "free_y") +
+    labs(y = "Mean perpendicular distance", x = NULL) +
+    theme_align
+
+  p_r2 <- ggplot(combined_summary,
+                 aes(x = Size, y = r_squared, color = Size, shape = Data, group = Data)) +
+    geom_errorbar(aes(ymin = 0, ymax = r_squared),
+                  linetype = plot_line_type, position = pos_dodge, width = 0, na.rm = TRUE) +
+    geom_point(position = pos_dodge, size = 3, na.rm = TRUE) +
+    facet_grid2(cplx ~ label, labeller = facet_labeller, axes = "x", remove_labels = TRUE, scales = "free_y") +
+    labs(y = "Coefficient of determination (R²)", x = NULL) +
+    theme_align
+
+  p_slope <- ggplot(combined_summary,
+                    aes(x = Size, y = slope_diff, color = Size, shape = Data, group = Data)) +
+    geom_errorbar(aes(ymin = 0, ymax = slope_diff),
+                  linetype = plot_line_type, position = pos_dodge, width = 0, na.rm = TRUE) +
+    geom_point(position = pos_dodge, size = 3, na.rm = TRUE) +
+    facet_grid2(cplx ~ label, labeller = facet_labeller, axes = "x", remove_labels = TRUE, scales = "free_y") +
+    scale_y_reverse() +
+    labs(y = "Slope difference", x = NULL) +
+    theme_align
+
+  p_dcor <- ggplot(combined_summary,
+                   aes(x = Size, y = dcor, color = Size, shape = Data, group = Data)) +
+    geom_errorbar(aes(ymin = 0, ymax = dcor),
+                  linetype = plot_line_type, position = pos_dodge, width = 0, na.rm = TRUE) +
+    geom_point(position = pos_dodge, size = 3, na.rm = TRUE) +
+    facet_grid2(cplx ~ label, labeller = facet_labeller, axes = "x", remove_labels = TRUE, scales = "free_y") +
+    labs(y = "Distance correlation", x = NULL) +
+    theme_align
+
+  p_abs <- ggplot(combined_summary,
+                  aes(x = Size, y = mean_abs_error, color = Size, shape = Data, group = Data)) +
+    geom_errorbar(aes(ymin = 0, ymax = mean_abs_error),
+                  linetype = plot_line_type, position = pos_dodge, width = 0, na.rm = TRUE) +
+    geom_point(position = pos_dodge, size = 3, na.rm = TRUE) +
+    facet_grid2(cplx ~ label, labeller = facet_labeller, axes = "x", remove_labels = TRUE, scales = "free_y") +
+    labs(y = "Mean absolute error", x = NULL) +
+    theme_align
+
+  p_spearman <- ggplot(combined_summary,
+                       aes(x = Size, y = spearman, color = Size, shape = Data, group = Data)) +
+    geom_errorbar(aes(ymin = 0, ymax = spearman),
+                  linetype = plot_line_type, position = pos_dodge, width = 0, na.rm = TRUE) +
+    geom_point(position = pos_dodge, size = 3, na.rm = TRUE) +
+    facet_grid2(cplx ~ label, labeller = facet_labeller, axes = "x", remove_labels = TRUE, scales = "free_y") +
+    labs(y = "Spearman's rank correlation", x = NULL) +
+    theme_align
+
+  if (var == "nd") {
+    plot_title <- expression("Alignment and error metrics of net diversification rate " * (italic(lambda)[0] - italic(mu)[0]))
+  } else if (var == "beta_n") {
+    plot_title <- expression("Alignment and error metrics of species richness effect on speciation rate " * (italic(beta)[N]))
+  } else if (var == "beta_phi") {
+    plot_title <- expression("Alignment and error metrics of evolutionary relatedness effect on speciation rate " * (italic(beta)[Phi]))
+  } else if (var == "gamma_n") {
+    plot_title <- expression("Alignment and error metrics of species richness effect on extinction rate " * (italic(gamma)[N]))
+  } else if (var == "gamma_phi") {
+    plot_title <- expression("Alignment and error metrics of evolutionary relatedness effect on extinction rate " * (italic(gamma)[Phi]))
+  } else {
+    stop("Invalid variable name. Must be one of 'nd', 'beta_n', 'beta_phi', 'gamma_n', 'gamma_phi'.")
+  }
+
+  combined_plot <- (p_r2 + p_slope) / (p_dcor + p_spearman) +
+    plot_layout(guides = "collect") +
+    plot_annotation(title = plot_title)
+
+  return(combined_plot)
+}
+
+align_data_list <- list(
+  "Complete" = plot_data_fig1_1,
+  "Per scenario" = plot_data_fig1_2,
+  "Per size" = plot_data_fig1_3
+)
+
+alignment_nd <- generate_alignment_figure_from_list(align_data_list, "nd")
+alignment_beta_n <- generate_alignment_figure_from_list(align_data_list, "beta_n")
+alignment_beta_phi <- generate_alignment_figure_from_list(align_data_list, "beta_phi")
+alignment_gamma_n <- generate_alignment_figure_from_list(align_data_list, "gamma_n")
+alignment_gamma_phi <- generate_alignment_figure_from_list(align_data_list, "gamma_phi")
+
+```
+
+Figure Group 2: Impact of effect sizes on actual tree size vs expected tree size and prediction error. Current: net diversification rate.
+
+```{r}
+t <- 10
+
+zval <- 8
+
+theory_df <- plot_data_fig1_1 %>%
+  mutate(
+    lambda_minus_mu = lambda - mu,
+    # Mean number of lineages at time t
+    expected_lineages = exp((lambda_minus_mu) * t),
+    # Variance (unconditional)
+    var_lineages = ((lambda + mu) / (lambda - mu)) *
+      exp((lambda_minus_mu) * t) *
+      (exp((lambda_minus_mu) * t) - 1),
+    sd_lineages = sqrt(var_lineages),
+    lower_bound = expected_lineages - zval * sd_lineages,
+    upper_bound = expected_lineages + zval * sd_lineages
+  )
+
+theory_df <- theory_df %>%
+  mutate(net_div_rate_error_clamped = pmin(abs(lambda_minus_mu - pred_lambda_after + pred_mu_after), 0.11))
+
+theme_left_2 <- theme(aspect.ratio = 1,
+                      axis.text.x = element_text(angle = 45, hjust = 1))
+
+theme_right_2 <- theme(axis.title.y = element_blank(),
+                       aspect.ratio = 1,
+                       axis.text.x = element_text(angle = 45, hjust = 1))
+
+plot_fig2_1 <- ggplot(theory_df) +
+  geom_ribbon(
+    aes(
+      x = lambda_minus_mu,
+      ymin = 2 * pmax(0, lower_bound) - 1, # clamp at 0 if desired
+      ymax = 2 * upper_bound - 1
+    ),
+    fill = "red", alpha = 0.1
+  ) +
+  geom_point(aes(lambda_minus_mu, num_nodes, color = net_div_rate_error_clamped)) +
+  geom_line(aes(lambda_minus_mu, 2 * expected_lineages - 1), color = "red", size = 1, linetype = "dashed") +
+  scale_color_nord(palette = "frost", discrete = FALSE, name = "Abs pred error",
+                   reverse = T,
+                   breaks = c(0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.11),
+                   labels = c("0", "0.02", "0.04", "0.06", "0.08", "0.10", "> 0.10")) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(0, 2500)) +
+  ylab("Tree size") +
+  xlab("True value") +
+  theme_left_2
+
+plot_fig2_2 <- ggplot(theory_df) +
+  geom_point(aes(lambda_minus_mu - pred_lambda_after + pred_mu_after, num_nodes, color = lambda_minus_mu)) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  coord_cartesian(xlim = c(-0.5, 0.5), ylim = c(0, 2500)) +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_nord(palette = "aurora", discrete = FALSE, name = "True value") +
+  ylab(NULL) +
+  xlab("Prediction error") +
+  theme_right_2
+
+plot_output_impact_nd <- plot_fig2_1 +
+  plot_fig2_2 +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect") +
+  plot_annotation(title = expression("Impact of effect size " * (italic(lambda)[0] - italic(mu)[0]))) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+```
+
+Figure Group 2: Impact of effect sizes on actual tree size vs expected tree size and prediction error. Current: species richness effect on speciation rate (beta_N).
+
+```{r}
+theory_df2 <- theory_df %>%
+  mutate(beta_n_error_clamped = pmin(abs(beta_n - pred_beta_n_after), 0.11))
+
+plot_fig2_3 <- ggplot(theory_df2) +
+  geom_point(aes(beta_n, num_nodes, color = beta_n_error_clamped)) +
+  scale_color_nord(palette = "frost", discrete = FALSE, name = "Abs pred error",
+                   reverse = T) +
+  coord_cartesian(xlim = c(-0.055, 0.005), ylim = c(0, 2500)) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  ylab("Tree size") +
+  xlab("True value") +
+  theme_left_2
+
+plot_fig2_4 <- ggplot(theory_df2) +
+  geom_point(aes(beta_n - pred_beta_n_after, num_nodes, color = beta_n)) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  coord_cartesian(xlim = c(-0.05, 0.05), ylim = c(0, 2500)) +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_nord(palette = "aurora", discrete = FALSE, name = "True value") +
+  ylab(NULL) +
+  xlab("Prediction error") +
+  theme_right_2
+
+plot_output_impact_beta_n <- plot_fig2_3 +
+  plot_fig2_4 +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect") +
+  plot_annotation(title = expression("Impact of effect size " * (italic(beta)[N]))) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+```
+
+Figure Group2: Impact of effect sizes on actual tree size vs expected tree size and prediction error. Current: evolutionary relatedness effect on speciation rate (beta_Phi).
+
+```{r}
+theory_df3 <- theory_df %>%
+  mutate(beta_phi_error_clamped = pmin(abs(beta_phi - pred_beta_phi_after), 0.11))
+
+plot_fig2_5 <- ggplot(theory_df3) +
+  geom_point(aes(beta_phi, num_nodes, color = beta_phi_error_clamped)) +
+  scale_color_nord(palette = "frost", discrete = FALSE, name = "Abs pred error",
+                   reverse = T) +
+  coord_cartesian(xlim = c(-0.06, 0.06), ylim = c(0, 2500)) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  ylab("Tree size") +
+  xlab("True value") +
+  theme_left_2
+
+plot_fig2_6 <- ggplot(theory_df3) +
+  geom_point(aes(beta_phi - pred_beta_phi_after, num_nodes, color = beta_phi)) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  coord_cartesian(xlim = c(-0.07, 0.07), ylim = c(0, 2500)) +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_nord(palette = "aurora", discrete = FALSE, name = "True value") +
+  ylab(NULL) +
+  xlab("Prediction error") +
+  theme_right_2
+
+plot_output_impact_beta_phi <- plot_fig2_5 +
+  plot_fig2_6 +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect") +
+  plot_annotation(title = expression("Impact of effect size " * (italic(beta)[Phi]))) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+```
+
+Figure Group 2: Impact of effect sizes on actual tree size vs expected tree size and prediction error. Current: species richness effect on extinction rate (gamma_N).
+
+```{r}
+theory_df4 <- theory_df %>%
+  mutate(gamma_n_error_clamped = pmin(abs(gamma_n - pred_gamma_n_after), 0.11))
+
+plot_fig2_7 <- ggplot(theory_df4) +
+  geom_point(aes(gamma_n, num_nodes, color = gamma_n_error_clamped)) +
+  scale_color_nord(palette = "frost", discrete = FALSE, name = "Abs pred error",
+                   reverse = T) +
+  coord_cartesian(xlim = c(-0.005, 0.055), ylim = c(0, 2500)) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  ylab("Tree size") +
+  xlab("True value") +
+  theme_left_2
+
+plot_fig2_8 <- ggplot(theory_df4) +
+  geom_point(aes(gamma_n - pred_gamma_n_after, num_nodes, color = gamma_n)) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  coord_cartesian(xlim = c(-0.05, 0.05), ylim = c(0, 2500)) +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_nord(palette = "aurora", discrete = FALSE, name = "True value") +
+  ylab(NULL) +
+  xlab("Prediction error") +
+  theme_right_2
+
+plot_output_impact_gamma_n <- plot_fig2_7 +
+  plot_fig2_8 +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect") +
+  plot_annotation(title = expression("Impact of effect size " * (italic(gamma)[N]))) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+```
+
+Figure Group 2: Impact of effect sizes on actual tree size vs expected tree size and prediction error. Current: evolutionary relatedness effect on extinction rate (gamma_Phi).
+
+```{r}
+theory_df5 <- theory_df %>%
+  mutate(gamma_phi_error_clamped = pmin(abs(gamma_phi - pred_gamma_phi_after), 0.11))
+
+plot_fig2_9 <- ggplot(theory_df5) +
+  geom_point(aes(gamma_phi, num_nodes, color = gamma_phi_error_clamped)) +
+  scale_color_nord(palette = "frost", discrete = FALSE, name = "Abs pred error",
+                   reverse = T) +
+  coord_cartesian(xlim = c(-0.0022, 0.0022), ylim = c(0, 2500)) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  ylab("Tree size") +
+  xlab("True value") +
+  theme_left_2
+
+plot_fig2_10 <- ggplot(theory_df5) +
+  geom_point(aes(gamma_phi - pred_gamma_phi_after, num_nodes, color = gamma_phi)) +
+  facet_grid(cplx ~ label, labeller = facet_labeller) +
+  coord_cartesian(xlim = c(-0.003, 0.003), ylim = c(0, 2500)) +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
+  scale_color_nord(palette = "aurora", discrete = FALSE, name = "True value") +
+  ylab(NULL) +
+  xlab("Prediction error") +
+  theme_right_2
+
+plot_output_impact_gamma_phi <- plot_fig2_9 +
+  plot_fig2_10 +
+  plot_layout(ncol = 2, axis_titles = "collect", guides = "collect") +
+  plot_annotation(title = expression("Impact of effect size " * (italic(gamma)[Phi]))) &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+```
+
+Figure Group 3: Model misspecification performance. Current: net diversification rate.
+
+```{r}
+plot_data_fig3 <- plot_data %>%
+  filter(dataset == "misspec_pd" |
+           dataset == "misspec_ed" |
+           dataset == "misspec_nnd") %>%
+  mutate(
+    error = abs((lambda - mu) -
+                  (pred_lambda_after - pred_mu_after))
+  )
+
+theme_left_3 <- theme(axis.title.x = element_blank(),
+                      aspect.ratio = 1,
+                      axis.text.x = element_text(angle = 45, hjust = 1))
+
+theme_middle_3 <- theme(axis.title.y = element_blank(),
+                        aspect.ratio = 1,
+                        axis.text.x = element_text(angle = 45, hjust = 1))
+
+theme_right_3 <- theme(axis.title.x = element_blank(),
+                       axis.title.y = element_blank(),
+                       aspect.ratio = 1,
+                       axis.text.x = element_text(angle = 45, hjust = 1))
+
+facet_labeller <- labeller(
+  cplx = toupper,
+  label = toupper,
+  dataset = toupper
+)
+
+# reassign misspec_pd = pd-trained, misspec_ed = ed-trained, misspec_nnd = nnd-trained
+plot_data_fig3 %>% mutate(dataset = case_when(
+  dataset == "misspec_pd" ~ "pd-trained",
+  dataset == "misspec_ed" ~ "ed-trained",
+  dataset == "misspec_nnd" ~ "nnd-trained"
+)) -> plot_data_fig3
+
+plot_data_fig3 %>% mutate(label = case_when(
+  label == "pd" ~ "pd-tested",
+  label == "ed" ~ "ed-tested",
+  label == "nnd" ~ "nnd-tested"
+)) -> plot_data_fig3
+
+plot_data_fig3$dataset <- factor(plot_data_fig3$dataset, levels = c("pd-trained", "ed-trained", "nnd-trained"))
+plot_data_fig3$label <- factor(plot_data_fig3$label, levels = c("pd-tested", "ed-tested", "nnd-tested"))
+
+plot_fig3_1 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "low")) +
+  geom_point(aes(lambda - mu, lambda - pred_lambda_after - mu + pred_mu_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(intercept = -0.24, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab(expression("Prediction error")) +
+  ggtitle("Trained on low complexity data") +
+  theme_left_3
+
+plot_fig3_2 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "medium")) +
+  geom_point(aes(lambda - mu, lambda - pred_lambda_after - mu + pred_mu_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(intercept = -0.24, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(lambda)[0] - italic(mu)[0]))) +
+  ggtitle("Trained on medium complexity data") +
+  theme_middle_3
+
+plot_fig3_3 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "high")) +
+  geom_point(aes(lambda - mu, lambda - pred_lambda_after - mu + pred_mu_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.5, 0.5)) +
+  geom_abline(intercept = -0.24, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab(NULL) +
+  xlab(NULL) +
+  ggtitle("Trained on high complexity data") +
+  theme_right_3
+
+plot_output_misspec_nd <- plot_fig3_1 +
+  plot_fig3_2 +
+  plot_fig3_3 +
+  plot_layout(ncol = 3, axis_titles = "collect", guides = "collect") &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_misspec_nd
+```
+
+Figure Group 3: Model misspecification performance. Current: species richness effect on speciation rate (beta_N).
+
+```{r}
+plot_fig3_4 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "low")) +
+  geom_point(aes(beta_n, beta_n - pred_beta_n_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(intercept = 0.025, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab("Prediction error") +
+  ggtitle("Trained on low complexity data") +
+  theme_left_3
+
+plot_fig3_5 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "medium")) +
+  geom_point(aes(beta_n, beta_n - pred_beta_n_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(intercept = 0.025, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(beta)[N]))) +
+  ggtitle("Trained on medium complexity data") +
+  theme_middle_3
+
+plot_fig3_6 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "high")) +
+  geom_point(aes(beta_n, beta_n - pred_beta_n_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(intercept = 0.025, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab(NULL) +
+  xlab(NULL) +
+  ggtitle("Trained on high complexity data") +
+  theme_right_3
+
+plot_output_misspec_beta_n <- plot_fig3_4 +
+  plot_fig3_5 +
+  plot_fig3_6 +
+  plot_layout(ncol = 3, axis_titles = "collect", guides = "collect") &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_misspec_beta_n
+```
+
+Figure Group 3: Model misspecification performance. Current: evolutionary relatedness effect on speciation rate (beta_Phi).
+
+```{r}
+plot_fig3_7 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "low")) +
+  geom_point(aes(beta_phi, beta_phi - pred_beta_phi_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.07, 0.07)) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab("Prediction error") +
+  ggtitle("Trained on low complexity data") +
+  theme_left_3
+
+plot_fig3_8 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "medium")) +
+  geom_point(aes(beta_phi, beta_phi - pred_beta_phi_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.07, 0.07)) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(beta)[Phi]))) +
+  ggtitle("Trained on medium complexity data") +
+  theme_middle_3
+
+plot_fig3_9 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "high")) +
+  geom_point(aes(beta_phi, beta_phi - pred_beta_phi_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.07, 0.07)) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab(NULL) +
+  xlab(NULL) +
+  ggtitle("Trained on high complexity data") +
+  theme_right_3
+
+plot_output_misspec_beta_phi <- plot_fig3_7 +
+  plot_fig3_8 +
+  plot_fig3_9 +
+  plot_layout(ncol = 3, axis_titles = "collect", guides = "collect") &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_misspec_beta_phi
+```
+
+Figure Group 3: Model misspecification performance. Current: species richness effect on extinction rate (gamma_N).
+
+```{r}
+plot_fig3_10 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "low")) +
+  geom_point(aes(gamma_n, gamma_n - pred_gamma_n_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(intercept = -0.025, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab("Prediction error") +
+  ggtitle("Trained on low complexity data") +
+  theme_left_3
+
+plot_fig3_11 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "medium")) +
+  geom_point(aes(gamma_n, gamma_n - pred_gamma_n_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(intercept = -0.025, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(gamma)[N]))) +
+  ggtitle("Trained on medium complexity data") +
+  theme_middle_3
+
+plot_fig3_12 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "high")) +
+  geom_point(aes(gamma_n, gamma_n - pred_gamma_n_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.04, 0.04)) +
+  geom_abline(intercept = -0.025, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab(NULL) +
+  xlab(NULL) +
+  ggtitle("Trained on high complexity data") +
+  theme_right_3
+
+plot_output_misspec_gamma_n <- plot_fig3_10 +
+  plot_fig3_11 +
+  plot_fig3_12 +
+  plot_layout(ncol = 3, axis_titles = "collect", guides = "collect") &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_misspec_gamma_n
+```
+
+Figure Group 3: Model misspecification performance. Current: evolutionary relatedness effect on extinction rate (gamma_Phi).
+
+```{r}
+plot_fig3_13 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "low")) +
+  geom_point(aes(gamma_phi, gamma_phi - pred_gamma_phi_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.003, 0.003)) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab("Prediction error") +
+  ggtitle("Trained on low complexity data") +
+  theme_left_3
+
+plot_fig3_14 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "medium")) +
+  geom_point(aes(gamma_phi, gamma_phi - pred_gamma_phi_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.003, 0.003)) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  xlab(expression("True value " * (italic(gamma)[Phi]))) +
+  ggtitle("Trained on medium complexity data") +
+  theme_middle_3
+
+plot_fig3_15 <- ggplot(dplyr::filter(plot_data_fig3, cplx == "high")) +
+  geom_point(aes(gamma_phi, gamma_phi - pred_gamma_phi_after, color = Size),
+             size = point_size, alpha = point_alpha) +
+  facet_grid(label ~ dataset, labeller = facet_labeller) +
+  coord_cartesian(ylim = c(-0.003, 0.003)) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  geom_hline(yintercept = 0, color = "black", linetype = "dashed") +
+  ylab(NULL) +
+  xlab(NULL) +
+  ggtitle("Trained on high complexity data") +
+  theme_right_3
+
+plot_output_misspec_gamma_phi <- plot_fig3_13 +
+  plot_fig3_14 +
+  plot_fig3_15 +
+  plot_layout(ncol = 3, axis_titles = "collect", guides = "collect") &
+  theme(plot.margin = margin(0, 0, 0, 0),
+        plot.background = element_rect(fill = "transparent", color = NA),
+        strip.background = element_rect(fill = "transparent", color = NA),
+        legend.background = element_rect(fill = "transparent", color = NA))
+
+plot_output_misspec_gamma_phi
+```
+
+Figure Group 4: Classification Performance
+
+```{r}
+parent_path <- "/Users/tianjian/Library/CloudStorage/OneDrive-Persoonlijk/My/Data/05122024"
+write_out_path <- file.path(parent_path, "FORMAL-PLOT")
+
+n_pars_string <- c("4", "6")
+data_path_string <- paste0("CLS-", n_pars_string, "-PARS")
+rds_gnn_name_string <- "EVE_FREE_TES_final_diffpool_3_gnn.rds"
+rds_lstm_name_string <- "EVE_FREE_TES_final_diffpool_3_lstm.rds"
+
+data_list_gnn_lstm <- list()
+data_list_gnn_lstm <- list(
+  GNN = readRDS(file.path(parent_path, data_path_string[2], rds_gnn_name_string)),
+  LSTM = readRDS(file.path(parent_path, data_path_string[2], rds_lstm_name_string))
+)
+
+data_list_gnn_lstm$GNN <-
+  data_list_gnn_lstm$GNN %>%
+  group_by(true_class) %>%
+  slice_sample(n = 3000) %>%
+  ungroup()
+
+data_list_gnn_lstm$LSTM <-
+  data_list_gnn_lstm$LSTM %>%
+  group_by(true_class) %>%
+  slice_sample(n = 3000) %>%
+  ungroup()
+
+table(data_list_gnn_lstm$GNN$true_class)
+table(data_list_gnn_lstm$LSTM$true_class)
+
+n_pars_to_level <- function(n_pars) {
+  if (n_pars == 2) {
+    return("LOW")
+  } else if (n_pars == 4) {
+    return("MEDIUM")
+  } else if (n_pars == 6) {
+    return("HIGH")
+  }
+}
+
+n_pars_to_path_index <- function(n_pars) {
+  if (n_pars == 2) {
+    stop("2 pars not supported")
+  } else if (n_pars == 4) {
+    return(1)
+  } else if (n_pars == 6) {
+    return(2)
+  }
+}
+
+data_list_n_pars <- list()
+for (n_pars in n_pars_string) {
+  data_list_n_pars[[n_pars_to_level(n_pars)]] <- readRDS(file.path(parent_path, data_path_string[n_pars_to_path_index(n_pars)], rds_gnn_name_string))
+}
+
+data_list_n_pars$MEDIUM <-
+  data_list_n_pars$MEDIUM %>%
+  group_by(true_class) %>%
+  slice_sample(n = 3000) %>%
+  ungroup()
+
+data_list_n_pars$HIGH <-
+  data_list_n_pars$HIGH %>%
+  group_by(true_class) %>%
+  slice_sample(n = 3000) %>%
+  ungroup()
+
+table(data_list_n_pars$MEDIUM$true_class)
+table(data_list_n_pars$HIGH$true_class)
+
+classification_visualization_multi <- function(input_list, output_path, figure_title, slicing_cols, ranges_list) {
+  dir.create(output_path, showWarnings = FALSE, recursive = TRUE)
+  dir.create(file.path(output_path, "confusion_matrices"), showWarnings = FALSE, recursive = TRUE)
+  dir.create(file.path(output_path, "precision_recall_f1_trends"), showWarnings = FALSE, recursive = TRUE)
+  dir.create(file.path(output_path, "precision_recall_f1_trends", figure_title), showWarnings = FALSE, recursive = TRUE)
+
+  precision_recall_f1_trends_multi <- function(data_list, slicing_cols, ranges_list, output_path) {
+    plot_list <- list()
+
+    for (i in seq_along(slicing_cols)) {
+      slicing_col <- slicing_cols[i]
+      ranges <- ranges_list[[i]]
+      metrics_data <- data.frame()
+
+      for (nm in names(data_list)) {
+        data <- data_list[[nm]]
+        # If slicing_col is "nd", compute nd = lambda - mu.
+        if (slicing_col == "nd") {
+          data <- data %>% mutate(nd = lambda - mu)
+        }
+        if (!is.numeric(data[[slicing_col]])) {
+          data[[slicing_col]] <- as.numeric(data[[slicing_col]])
+        }
+
+        for (range in ranges) {
+          lower <- range[1]
+          upper <- range[2]
+          sliced_data <- data %>% filter((!!sym(slicing_col)) >= lower, (!!sym(slicing_col)) < upper)
+          
+          if (nrow(sliced_data) <= 200) next
+
+          prob_mat <- as.matrix(sliced_data %>% dplyr::select(pd_prob, ed_prob, nnd_prob))
+          pred_idx <- max.col(prob_mat, ties.method = "first") - 1
+          true_class <- sliced_data$true_class
+
+          conf_mat <- table(factor(true_class, levels = c(0, 1, 2)),
+                            factor(pred_idx, levels = c(0, 1, 2)))
+
+          classes <- c("PD", "ED", "NND")
+          for (j in 1:3) {
+            tp <- conf_mat[j, j]
+            fp <- sum(conf_mat[, j]) - tp
+            fn <- sum(conf_mat[j,]) - tp
+            precision <- ifelse(tp + fp == 0, NA, tp / (tp + fp))
+            recall <- ifelse(tp + fn == 0, NA, tp / (tp + fn))
+            f1 <- ifelse(is.na(precision) ||
+                           is.na(recall) ||
+                           (precision + recall) == 0,
+                         NA, 2 * precision * recall / (precision + recall))
+
+            range_label <- paste0("[", lower, ",", upper, ")")
+            metrics_data <- rbind(metrics_data,
+                                  data.frame(range = range_label,
+                                             Class = classes[j],
+                                             Metric = "Precision",
+                                             Value = precision,
+                                             Data = nm))
+            metrics_data <- rbind(metrics_data,
+                                  data.frame(range = range_label,
+                                             Class = classes[j],
+                                             Metric = "Recall",
+                                             Value = recall,
+                                             Data = nm))
+            metrics_data <- rbind(metrics_data,
+                                  data.frame(range = range_label,
+                                             Class = classes[j],
+                                             Metric = "F1",
+                                             Value = f1,
+                                             Data = nm))
+          }
+        }
+      }
+
+      # Order the range factor according to the defined slicing ranges.
+      range_levels <- sapply(ranges, function(r) paste0("[", r[1], ",", r[2], ")"))
+      metrics_data$range <- factor(metrics_data$range, levels = range_levels, labels = range_levels)
+      metrics_data$Class <- factor(metrics_data$Class, levels = c("PD", "ED", "NND"))
+
+      x_label <- switch(
+        slicing_col,
+        lambda    = expression("Parameter ranges:" ~ italic(lambda)),
+        mu        = expression("Parameter ranges:" ~ italic(mu)),
+        beta_n    = expression("Parameter ranges:" ~ italic(beta)[N]),
+        beta_phi  = expression("Parameter ranges:" ~ italic(beta)[phi]),
+        gamma_n   = expression("Parameter ranges:" ~ italic(gamma)[N]),
+        gamma_phi = expression("Parameter ranges:" ~ italic(gamma)[phi]),
+        num_nodes = expression("Tree-size ranges:" ~ "|" * italic(T) * "|"),
+        nd        = expression("Parameter ranges:" ~ (italic(lambda[0]) - italic(mu[0]))),
+        paste("Parameter ranges:", slicing_col)
+      )
+
+      y_label <- "Metric value"
+
+      p_trends <- ggplot(metrics_data,
+                         aes(x = range, y = Value, group = interaction(Data, Class),
+                             color = Class, linetype = Data)) +
+        geom_line() +
+        geom_point() +
+        facet_grid(. ~ Metric, scales = "free_y") +
+        scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"),
+                           labels = c("PD", "ED", "NND")) +
+        labs(x = x_label, y = y_label) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              panel.background = element_blank())
+
+      ggsave(filename = file.path(output_path, "precision_recall_f1_trends", figure_title,
+                                  paste0(slicing_col, "_trends_multi.pdf")),
+             plot = p_trends, width = 16, height = 9)
+
+      plot_list[[slicing_col]] <- p_trends
+    }
+
+    combined_plot <- wrap_plots(plot_list, ncol = 2, byrow = T) +
+      plot_layout(guides = "collect") +
+      plot_annotation(title = figure_title)
+    n_panels <- length(plot_list)
+    figure_height <- ceiling(n_panels / 2) * 3 + 1
+    ggsave(filename = file.path(output_path, "precision_recall_f1_trends", figure_title, "all_trends_multi.pdf"),
+           plot = combined_plot, width = 13, height = figure_height, dpi = 300)
+    return(combined_plot)
+  }
+
+  # Plot precision, recall, and F1 trends
+  precision_recall_f1_trends_multi(input_list, slicing_cols, ranges_list, output_path)
+}
+
+classification_visualization_single <- function(input_list, var, ranges, output_path, figure_title) {
+  dir.create(output_path, showWarnings = FALSE, recursive = TRUE)
+  dir.create(file.path(output_path, "precision_recall_f1_trends"), showWarnings = FALSE, recursive = TRUE)
+
+  precision_recall_f1_trends_single <- function(data_list, slicing_col, ranges, figure_title) {
+    metrics_data <- data.frame()
+
+    for (nm in names(data_list)) {
+      data <- data_list[[nm]]
+      # If slicing_col is "nd", compute nd = lambda - mu.
+      if (slicing_col == "nd") {
+        data <- data %>% mutate(nd = lambda - mu)
+      }
+      if (!is.numeric(data[[slicing_col]])) {
+        data[[slicing_col]] <- as.numeric(data[[slicing_col]])
+      }
+
+      for (range in ranges) {
+        lower <- range[1]
+        upper <- range[2]
+        sliced_data <- data %>% filter((!!sym(slicing_col)) >= lower, (!!sym(slicing_col)) < upper)
+        prob_mat <- as.matrix(sliced_data %>% dplyr::select(pd_prob, ed_prob, nnd_prob))
+        pred_idx <- max.col(prob_mat, ties.method = "first") - 1
+        true_class <- sliced_data$true_class
+
+        conf_mat <- table(factor(true_class, levels = c(0, 1, 2)),
+                          factor(pred_idx, levels = c(0, 1, 2)))
+
+        classes <- c("PD", "ED", "NND")
+        for (j in 1:3) {
+          tp <- conf_mat[j, j]
+          fp <- sum(conf_mat[, j]) - tp
+          fn <- sum(conf_mat[j,]) - tp
+          precision <- ifelse(tp + fp == 0, NA, tp / (tp + fp))
+          recall <- ifelse(tp + fn == 0, NA, tp / (tp + fn))
+          f1 <- ifelse(is.na(precision) ||
+                         is.na(recall) ||
+                         (precision + recall) == 0,
+                       NA, 2 * precision * recall / (precision + recall))
+
+          range_label <- paste0("[", lower, ",", upper, ")")
+          metrics_data <- rbind(metrics_data,
+                                data.frame(range = range_label,
+                                           Class = classes[j],
+                                           Metric = "Precision",
+                                           Value = precision,
+                                           Data = nm))
+          metrics_data <- rbind(metrics_data,
+                                data.frame(range = range_label,
+                                           Class = classes[j],
+                                           Metric = "Recall",
+                                           Value = recall,
+                                           Data = nm))
+          metrics_data <- rbind(metrics_data,
+                                data.frame(range = range_label,
+                                           Class = classes[j],
+                                           Metric = "F1",
+                                           Value = f1,
+                                           Data = nm))
+        }
+      }
+    }
+
+    # Order the range factor according to the defined slicing ranges.
+    range_levels <- sapply(ranges, function(r) paste0("[", r[1], ",", r[2], ")"))
+    metrics_data$range <- factor(metrics_data$range, levels = range_levels)
+    metrics_data$Class <- factor(metrics_data$Class, levels = c("PD", "ED", "NND"))
+
+      x_label <- switch(
+        slicing_col,
+        lambda    = expression("Parameter ranges:" ~ italic(lambda)),
+        mu        = expression("Parameter ranges:" ~ italic(mu)),
+        beta_n    = expression("Parameter ranges:" ~ italic(beta)[N]),
+        beta_phi  = expression("Parameter ranges:" ~ italic(beta)[phi]),
+        gamma_n   = expression("Parameter ranges:" ~ italic(gamma)[N]),
+        gamma_phi = expression("Parameter ranges:" ~ italic(gamma)[phi]),
+        num_nodes = expression("Tree-size ranges:" ~ "|" * italic(T) * "|"),
+        nd        = expression("Parameter ranges:" ~ (italic(lambda[0]) - italic(mu[0]))),
+        paste("Parameter ranges:", slicing_col)
+      )
+
+      y_label <- "Metric value"
+
+      p_trends <- ggplot(metrics_data,
+                         aes(x = range, y = Value, group = interaction(Data, Class),
+                             color = Class, linetype = Data)) +
+        geom_line() +
+        geom_point() +
+        facet_grid(. ~ Metric, scales = "free_y") +
+        scale_color_manual(name = "Scn", values = c("#ffe990", "#7381f1", "#f59999"),
+                           labels = c("PD", "ED", "NND")) +
+        labs(x = x_label, y = y_label) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              panel.background = element_blank())
+
+    return(p_trends)
+  }
+
+  # Plot precision, recall, and F1 trends
+  plot_figure <- precision_recall_f1_trends_single(input_list, var, ranges, figure_title)
+
+  ggsave(filename = file.path(output_path, "precision_recall_f1_trends", paste0(var, "_trends_single.png")),
+         plot = plot_figure, width = 7, height = 4, dpi = 300)
+}
+
+# Define the slicing ranges for each parameter
+lambda_ranges <- list(c(0.20, 0.30), c(0.30, 0.40), c(0.40, 0.50), c(0.50, 0.60))
+mu_ranges <- list(c(0.00, 0.12), c(0.12, 0.24), c(0.24, 0.36), c(0.36, 0.48))
+beta_n_ranges <- list(c(-0.05, -0.04), c(-0.04, -0.03), c(-0.03, -0.02),
+                      c(-0.02, -0.01), c(-0.01, 0.00))
+beta_phi_ranges <- list(c(-0.05, -0.04), c(-0.04, -0.03), c(-0.03, -0.02),
+                        c(-0.02, -0.01), c(-0.01, 0.00), c(0.00, 0.01), c(0.01, 0.02),
+                        c(0.02, 0.03), c(0.03, 0.04), c(0.04, 0.05))
+gamma_n_ranges <- list(c(0.00, 0.01), c(0.01, 0.02), c(0.02, 0.03), c(0.03, 0.04), c(0.04, 0.05))
+gamma_phi_ranges <- list(c(-0.0020, -0.0015), c(-0.0015, -0.0010), c(-0.0010, -0.0005),
+                         c(-0.0005, 0.0000), c(0.0000, 0.0005), c(0.0005, 0.0010),
+                         c(0.0010, 0.0015), c(0.0015, 0.0020))
+num_nodes_ranges <- list(c(0, 20), c(20, 40), c(40, 60), c(60, 80),
+                         c(80, 100), c(100, 120), c(120, 140), c(140, 160), c(160, Inf))
+nd_ranges <- list(c(0, 0.1), c(0.1, 0.2), c(0.2, 0.3), c(0.3, 0.4),
+                  c(0.4, 0.5), c(0.5, 0.6))
+
+slicing_cols1 <- c("nd", "num_nodes", "beta_n", "gamma_n", "beta_phi", "gamma_phi")
+
+ranges_list1 <- list(nd_ranges, num_nodes_ranges, beta_n_ranges, gamma_n_ranges, beta_phi_ranges,
+                     gamma_phi_ranges)
+
+slicing_cols2 <- c("nd", "num_nodes", "beta_n", "beta_phi")
+
+ranges_list2 <- list(nd_ranges, num_nodes_ranges, beta_n_ranges, beta_phi_ranges)
+
+classification_visualization_multi(data_list_gnn_lstm, write_out_path, "Classification Performance - LSTM vs GNN", slicing_cols1, ranges_list1)
+classification_visualization_multi(data_list_n_pars, write_out_path, "Classification Performance - Comparison Between Complexity", slicing_cols2, ranges_list2)
+classification_visualization_single(data_list_n_pars, "nd", nd_ranges, write_out_path, "Classification Performance - Different Number of Parameters")
+
+plot_confusion_two_rows <- function(model_list, complexity_list, output_path,
+                                    file_name      = "conf_matrix_two_rows.pdf",
+                                    title_pt       = 18,
+                                    cell_pt        = 12,
+                                    axis_text_pt   = 12,
+                                    axis_title_pt  = 13,
+                                    row_title_pt   = 16) {
+  dir.create(file.path(output_path, "confusion_matrices"),
+             showWarnings = FALSE, recursive = TRUE)
+
+  .prep_cm <- function(df) {
+    prob_mat   <- as.matrix(df %>% dplyr::select(pd_prob, ed_prob, nnd_prob))
+    pred_idx   <- max.col(prob_mat, ties.method = "first") - 1
+    true_class <- df$true_class
+
+    tab <- table(
+      factor(true_class, levels = c(0, 1, 2)),
+      factor(pred_idx,   levels = c(0, 1, 2))
+    )
+    dimnames(tab) <- list(True = c("PD", "ED", "NND"),
+                          Predicted = c("PD", "ED", "NND"))
+    dplyr::as_tibble(as.data.frame(as.table(tab)))
+  }
+
+  .panel_counts <- function(cm_df, title_text) {
+    cm_df2 <- cm_df %>%
+      dplyr::group_by(True) %>%
+      dplyr::mutate(
+        row_total = sum(Freq),
+        recall    = ifelse(row_total > 0, Freq / row_total, NA_real_),
+        label_text = sprintf("%d\n%.1f%%", Freq, 100 * recall)
+      ) %>%
+      dplyr::ungroup()
+
+    # y-axis reversed so diagonal PD–PD, ED–ED, NND–NND
+    y_levels <- rev(levels(cm_df2$True))
+
+    ggplot(cm_df2, aes(x = Predicted, y = True, fill = recall)) +
+      geom_tile(color = "white", linewidth = 0.6) +
+      ggfittext::geom_fit_text(
+        aes(label = label_text),
+        fontface = "bold", size = cell_pt / .pt, contrast = TRUE
+      ) +
+      scale_fill_viridis_c(
+        option = "cividis", begin = 0.05, end = 0.95,
+        limits = c(0, 1),
+        labels = scales::percent_format(accuracy = 1),
+        name   = "Recall"
+      ) +
+      labs(
+        title = title_text,
+        x     = "Predicted class",
+        y     = "True class"
+      ) +
+      coord_equal() +
+      scale_x_discrete(expand = c(0, 0)) +
+      scale_y_discrete(expand = c(0, 0), limits = y_levels) +
+      theme_minimal(base_size = axis_text_pt) +
+      theme(
+        legend.position  = "none",
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        axis.ticks       = element_blank(),
+        plot.title       = element_text(face = "bold", hjust = 0.5, size = title_pt),
+        axis.title.x     = element_text(margin = margin(t = 8), size = axis_title_pt),
+        axis.title.y     = element_text(margin = margin(r = 8), size = axis_title_pt),
+        axis.text        = element_text(size = axis_text_pt)
+      )
+  }
+
+  .panel_delta <- function(cm_A, cm_B, title_text) {
+    df <- cm_A %>%
+      dplyr::rename(Freq_A = Freq) %>%
+      dplyr::inner_join(cm_B %>% dplyr::rename(Freq_B = Freq),
+                        by = c("True", "Predicted")) %>%
+      dplyr::group_by(True) %>%
+      dplyr::mutate(
+        n_A = sum(Freq_A),
+        n_B = sum(Freq_B),
+        p_A = ifelse(n_A > 0, Freq_A / n_A, NA_real_),
+        p_B = ifelse(n_B > 0, Freq_B / n_B, NA_real_),
+        delta_pp = 100 * (p_B - p_A)
+      ) %>%
+      dplyr::ungroup() %>%
+      dplyr::mutate(
+        lab = sprintf("%+.1f%%", delta_pp)
+      )
+
+    lim <- max(abs(df$delta_pp), na.rm = TRUE)
+    if (!is.finite(lim) || lim == 0) lim <- 1
+
+    y_levels <- rev(levels(df$True))
+
+    ggplot(df, aes(Predicted, True, fill = delta_pp)) +
+      geom_tile(color = "white", linewidth = 0.6) +
+      ggfittext::geom_fit_text(
+        aes(label = lab),
+        fontface = "bold", size = cell_pt / .pt
+      ) +
+      scale_fill_gradient2(
+        name   = "Δ recall (pp)",
+        low    = "#4C6EF5",
+        mid    = "white",
+        high   = "#F03E3E",
+        limits = c(-lim, lim)
+      ) +
+      labs(
+        title = title_text,
+        x     = "Predicted class",
+        y     = "True class"
+      ) +
+      coord_equal() +
+      scale_x_discrete(expand = c(0, 0)) +
+      scale_y_discrete(expand = c(0, 0), limits = y_levels) +
+      theme_minimal(base_size = axis_text_pt) +
+      theme(
+        legend.position = "none",
+        panel.grid      = element_blank(),
+        axis.ticks      = element_blank(),
+        plot.title      = element_text(face = "bold", hjust = 0.5, size = title_pt),
+        axis.title.x    = element_text(size = axis_title_pt),
+        axis.title.y    = element_text(size = axis_title_pt),
+        axis.text       = element_text(size = axis_text_pt)
+      )
+  }
+
+  .triptych_from_list <- function(dl, row_title = NULL) {
+    stopifnot(length(dl) >= 2)
+    nm_A <- names(dl)[1]  # baseline A
+    nm_B <- names(dl)[2]  # comparison B
+
+    cm_A <- .prep_cm(dl[[nm_A]])
+    cm_B <- .prep_cm(dl[[nm_B]])
+
+    p1 <- .panel_counts(cm_A, sprintf("Confusion matrix – %s (A)", nm_A))
+    p2 <- .panel_counts(cm_B, sprintf("Confusion matrix – %s (B)", nm_B))
+    p3 <- .panel_delta(cm_A, cm_B, "Change in recall (B – A)")
+
+    row_plot <- p1 + p2 + p3 + patchwork::plot_layout(ncol = 3)
+
+    if (!is.null(row_title)) {
+      row_plot <- row_plot +
+        patchwork::plot_annotation(title = row_title) &
+        theme(plot.title = element_text(hjust = 0.5, face = "bold",
+                                       size = row_title_pt))
+    }
+    row_plot
+  }
+
+  row1 <- .triptych_from_list(model_list,      row_title = "Between architectures")
+  row2 <- .triptych_from_list(complexity_list, row_title = "Between complexity levels")
+
+  combined <- row1 / row2 + patchwork::plot_layout(heights = c(1, 1))
+
+  out_file <- file.path(output_path, "confusion_matrices", file_name)
+  ggsave(filename = out_file, plot = combined,
+         width = 18, height = 12, dpi = 300)
+
+  invisible(combined)
+}
+
+
+plot_confusion_two_rows(
+  model_list = data_list_gnn_lstm, 
+  complexity_list = data_list_n_pars, 
+  output_path = write_out_path, 
+  title_pt       = 22,
+  cell_pt        = 55,
+  axis_text_pt   = 15,
+  axis_title_pt  = 16,
+  row_title_pt   = 18)
+
+prep_list <- function(dl) {
+  bind_rows(lapply(names(dl), function(nm) {
+    df <- dl[[nm]]
+    prob_mat <- as.matrix(df %>% dplyr::select(pd_prob, ed_prob, nnd_prob))
+    pred_idx <- max.col(prob_mat, ties.method = "first") - 1
+    df %>%
+      mutate(model = nm,
+             pred_class = pred_idx,
+             correct = as.integer(pred_class == true_class),
+             num_nodes = as.numeric(num_nodes),
+             nd = lambda - mu,
+             true_class_f = factor(true_class, levels = 0:2, labels = c("PD","ED","NND")))
+  }))
+}
+
+df_all <- prep_list(data_list_gnn_lstm)
+
+long_par <- df_all %>%
+  dplyr::select(model, true_class_f, correct, num_nodes, lambda, mu, beta_n, beta_phi, gamma_n, gamma_phi, nd) %>%
+  tidyr::pivot_longer(-c(model, true_class_f, correct), names_to = "param", values_to = "value")
+
+p_ridges <- ggplot2::ggplot(
+  long_par,
+  ggplot2::aes(x = value, y = interaction(true_class_f, model), fill = factor(correct))
+) +
+  ggridges::geom_density_ridges(scale = 1.2, alpha = 0.8, color = NA) +
+  ggplot2::scale_fill_manual(values = c("#dadada", "#5ab4ac"), name = "Correct", labels = c("No", "Yes")) +
+  ggplot2::facet_wrap(~ param, scales = "free_x") +
+  ggplot2::labs(x = "Parameter value", y = "Class \u00B7 Model", title = "Parameter distributions by correctness") +
+  ggplot2::theme_minimal(base_size = 12)
+
+compute_param_effect_stats <- function(
+  df_all,
+  params           = c("lambda","mu","beta_n","beta_phi","gamma_n","gamma_phi"),
+  ks_min_per_group = 20,
+  R_pdcor          = 499
+){
+  stopifnot(all(c("model","true_class_f","correct") %in% names(df_all)))
+
+  long_par <- df_all %>%
+    dplyr::select(model, true_class_f, correct, dplyr::all_of(params)) %>%
+    tidyr::pivot_longer(-c(model, true_class_f, correct), names_to = "param", values_to = "value") %>%
+    dplyr::mutate(correct = as.integer(correct == 1))
+
+  adj_subtitle <- "Adjusted global dependence: n/a"
+  if (requireNamespace("energy", quietly = TRUE)) {
+    X <- as.matrix(df_all[, params])
+    Y <- as.integer(df_all$correct)
+    Z <- stats::model.matrix(~ true_class_f + model, data = df_all)[, -1, drop = FALSE]
+    if (is.matrix(X) && is.numeric(Y) && is.matrix(Z)) {
+      set.seed(1)
+      ptest <- try(energy::pdcor.test(X, Y, Z, R = R_pdcor), silent = TRUE)
+      if (!inherits(ptest, "try-error") && is.list(ptest) && !is.null(ptest$p.value)) {
+        p_glob <- ptest$p.value
+        stars  <- ifelse(p_glob < 0.001, "***",
+                  ifelse(p_glob < 0.01,  "**",
+                  ifelse(p_glob < 0.05,  "*", "")))
+        adj_subtitle <- sprintf("Adjusted global dependence (partial dCor): p = %.3g %s", p_glob, stars)
+      }
+    }
+  }
+
+  ks_tbl <- long_par %>%
+    dplyr::group_by(model, true_class_f, param) %>%
+    dplyr::summarise(
+      n_yes = sum(correct == 1), n_no = sum(correct == 0),
+      .stats = list({
+        v_yes <- value[correct == 1]; v_no <- value[correct == 0]
+        if (length(v_yes) > ks_min_per_group && length(v_no) > ks_min_per_group) {
+          out <- suppressWarnings(stats::ks.test(v_yes, v_no))
+          list(D = unname(out$statistic), p = out$p.value)
+        } else list(D = NA_real_, p = NA_real_)
+      }),
+      .groups = "drop"
+    ) %>%
+    dplyr::mutate(
+      D = purrr::map_dbl(.stats, "D"),
+      p = purrr::map_dbl(.stats, "p")
+    ) %>%
+    dplyr::select(-.stats) %>%
+    dplyr::mutate(
+      p_adj = p.adjust(p, method = "BH"),
+      ks_lab = dplyr::case_when(
+        is.na(p_adj) ~ "KS: n/a",
+        p_adj < 0.001 ~ sprintf("KS: D=%.2f\np<0.001 ***", D),
+        p_adj < 0.01  ~ sprintf("KS: D=%.2f\np=%.3f **", D, p_adj),
+        p_adj < 0.05  ~ sprintf("KS: D=%.2f\np=%.3f *",  D, p_adj),
+        TRUE          ~ sprintf("KS: D=%.2f\np=%.3f",     D, p_adj)
+      )
+    )
+
+  list(
+    long_par     = long_par,
+    ks_tbl       = ks_tbl,
+    adj_subtitle = adj_subtitle,
+    params       = params
+  )
+}
+
+plot_param_ridges_with_stats_from <- function(
+  stats_obj,
+  ridge_scale     = 1.2,
+  fill_yes        = "#5ab4ac",
+  fill_no         = "salmon",
+  title_pt        = 21,
+  subtitle_pt     = 14,
+  strip_pt        = 14,
+  axis_title_pt   = 14,
+  axis_text_pt    = 13,
+  legend_title_pt = 14,
+  legend_text_pt  = 13,
+  ks_pt           = 14,
+  label_padding   = 0.10
+){
+  stopifnot(is.list(stats_obj),
+            all(c("long_par","ks_tbl","adj_subtitle","params") %in% names(stats_obj)))
+
+  has_ggtext   <- requireNamespace("ggtext", quietly = TRUE)
+  long_par     <- stats_obj$long_par
+  ks_tbl       <- stats_obj$ks_tbl
+  adj_subtitle <- stats_obj$adj_subtitle
+
+  pos_tbl <- long_par %>%
+    dplyr::group_by(param) %>%
+    dplyr::summarise(
+      x_left  = stats::quantile(value, 0.005, na.rm = TRUE),
+      x_right = stats::quantile(value, 0.995, na.rm = TRUE),
+      span    = x_right - x_left,
+      .groups = "drop"
+    )
+
+  ks_labels <- ks_tbl %>%
+    dplyr::left_join(pos_tbl, by = "param") %>%
+    dplyr::mutate(
+      y_lab = interaction(true_class_f, model, drop = TRUE),
+      x     = x_right + label_padding * span
+    )
+
+  lab_fun <- ggplot2::labeller(param = ggplot2::as_labeller(c(
+    lambda    = "italic(lambda)",
+    mu        = "italic(mu)",
+    beta_n    = "italic(beta)[N]",
+    beta_phi  = "italic(beta)[Phi]",
+    gamma_n   = "italic(gamma)[N]",
+    gamma_phi = "italic(gamma)[Phi]"
+  ), label_parsed))
+
+  # subtitle_text <- paste(
+  #   "Right: KS two-sample test (per parameter, per Class\u00B7Model).",
+  #   adj_subtitle, sep = "\n"
+  # )
+  
+  subtitle_text <- adj_subtitle
+
+  p <- ggplot2::ggplot(
+    long_par,
+    ggplot2::aes(x = value, y = interaction(true_class_f, model), fill = factor(correct))
+  ) +
+    ggridges::geom_density_ridges(scale = ridge_scale, alpha = 0.85, color = NA) +
+    ggplot2::scale_fill_manual(values = c("0" = fill_no, "1" = fill_yes),
+                               name = "Correct", labels = c("No", "Yes")) +
+    ggplot2::facet_wrap(~ param, scales = "free_x", labeller = lab_fun) +
+    ggplot2::labs(
+      x = "Parameter value",
+      y = "Class \u00B7 Model",
+      title = "Parameter distributions by correctness",
+      subtitle = subtitle_text
+    ) +
+    ggplot2::theme(
+      plot.title    = ggplot2::element_text(size = title_pt, face = "bold"),
+      plot.subtitle = ggplot2::element_text(size = subtitle_pt),
+      panel.background = ggplot2::element_blank(),
+      strip.text    = ggplot2::element_text(size = strip_pt, face = "bold"),
+      axis.title    = ggplot2::element_text(size = axis_title_pt),
+      axis.text     = ggplot2::element_text(size = axis_text_pt),
+      legend.title  = ggplot2::element_text(size = legend_title_pt),
+      legend.text   = ggplot2::element_text(size = legend_text_pt),
+      legend.position = "top"
+    ) +
+    ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0.06, 0.28))) +
+    ggplot2::coord_cartesian(clip = "off")
+
+  if (has_ggtext) {
+    p <- p +
+      ggtext::geom_richtext(
+        data = ks_labels,
+        ggplot2::aes(x = x, y = y_lab, label = ks_lab),
+        inherit.aes = FALSE,
+        hjust = 1.2, vjust = 0.5,
+        label.colour = NA,
+        fill = scales::alpha("white", 0.65),
+        size = ks_pt / .pt
+      )
+  } else {
+    p <- p +
+      ggplot2::geom_text(
+        data = ks_labels,
+        ggplot2::aes(x = x, y = y_lab, label = ks_lab),
+        inherit.aes = FALSE,
+        hjust = 1, vjust = 0.5,
+        size = ks_pt / .pt
+      )
+  }
+
+  p
+}
+
+stats_obj <- compute_param_effect_stats(
+  df_all,
+  params = c("lambda","mu","beta_n","beta_phi","gamma_n","gamma_phi"),
+  ks_min_per_group = 20,
+  R_pdcor = 499
+)
+
+p_param_dist_effect <- plot_param_ridges_with_stats_from(
+  stats_obj,
+  ridge_scale = 1.2,
+  fill_yes = "turquoise",
+  fill_no  = "salmon",
+  title_pt = 21,
+  subtitle_pt = 14,
+  strip_pt = 14,
+  axis_title_pt = 14,
+  axis_text_pt = 13,
+  legend_title_pt = 14,
+  legend_text_pt = 13,
+  ks_pt = 14,
+  label_padding = 0.04
+)
+
+ggplot2::ggsave(
+  file.path(write_out_path, "param_dist_effect.pdf"),
+  p_param_dist_effect,
+  width = 15.5, height = 10, dpi = 600
+)
+
+# Bin num_nodes and test trend in success proportions
+size_bins <- c(0, 20, 40, 60, 80, 100, 120, 140, 160, Inf)
+df_bins <- df_all %>%
+  mutate(size_bin = cut(num_nodes, breaks = size_bins, right = FALSE)) %>%
+  group_by(model, true_class_f, size_bin) %>%
+  summarise(n = n(), acc = mean(correct), .groups = "drop")
+
+# Plot accuracy by size bin
+p_size <- ggplot(df_bins, aes(size_bin, acc, group = interaction(model,true_class_f), color = model)) +
+  geom_line() + geom_point() +
+  facet_wrap(~ true_class_f) +
+  labs(x = "Tree size (bins)", y = "Accuracy", title = "Accuracy trend vs tree size") +
+  theme_minimal(base_size = 12)
+# ggsave(file.path(write_out_path, "acc_vs_size_bins.png"), p_size, w = 10, h = 5, dpi = 300)
+
+# Smooth logistic GAM of correctness ~ s(num_nodes) + class + model
+gam_fit <- mgcv::gam(correct ~ s(num_nodes, k = 6) + true_class_f + model,
+                     data = df_all, family = binomial())
+gam_sum <- broom::tidy(gam_fit)  # EDF/chi-sq show whether size has a nonlinear effect  [ref: mgcv/GAM]
+
+curve_for <- function(df, var, nbins = 12) {
+  brks <- quantile(df[[var]], probs = seq(0, 1, length.out = nbins + 1), na.rm = TRUE)
+  df %>%
+    mutate(bin = cut(.data[[var]], breaks = unique(brks), include.lowest = TRUE)) %>%
+    group_by(model, true_class_f, bin) %>%
+    summarise(p_correct = mean(correct), mid = mean(.data[[var]], na.rm = TRUE), .groups = "drop")
+}
+curve_nd  <- curve_for(df_all, "nd")
+curve_bn  <- curve_for(df_all, "beta_n")
+curve_sz  <- curve_for(df_all, "num_nodes")
+
+p_pdp <- function(curve_df, xlab) {
+  ggplot(curve_df, aes(mid, p_correct, color = model)) +
+    geom_line() + geom_point() +
+    facet_wrap(~ true_class_f, scales = "free_y") +
+    labs(x = xlab, y = "Pr(correct)", title = paste0("Empirical effect of ", xlab)) +
+    theme_minimal(base_size = 12)
+}
+p_nd  <- p_pdp(curve_nd, expression(italic(lambda) - italic(mu)))
+p_bn  <- p_pdp(curve_bn, expression(italic(beta)[N]))
+p_sz  <- p_pdp(curve_sz, "num_nodes")
+ggsave(file.path(write_out_path, "pdp_like_nd_betaN_size.png"), (p_nd / p_bn / p_sz), w=8, h=9, dpi=300)
+
+mk_2d <- function(df, nx = 8, ny = 16, label_bins = TRUE) {
+  df2 <- df %>%
+    mutate(
+      nd_q = dplyr::ntile(nd, nx),
+      sz_q = dplyr::ntile(num_nodes, ny)
+    )
+
+  if (label_bins) {
+    nd_lab <- df2 %>% group_by(nd_q) %>%
+      summarise(lo = min(nd, na.rm = TRUE), hi = max(nd, na.rm = TRUE), .groups = "drop") %>%
+      mutate(lab = paste0("[", round(lo, 3), ", ", round(hi, 3), "]"))
+    sz_lab <- df2 %>% group_by(sz_q) %>%
+      summarise(lo = min(num_nodes, na.rm = TRUE), hi = max(num_nodes, na.rm = TRUE), .groups = "drop") %>%
+      mutate(lab = paste0("[", round(lo), ", ", round(hi), "]"))
+
+    df2 <- df2 %>%
+      mutate(
+        nd_bin = factor(nd_q, levels = nd_lab$nd_q, labels = nd_lab$lab),
+        sz_bin = factor(sz_q, levels = sz_lab$sz_q, labels = sz_lab$lab)
+      )
+  } else {
+    df2 <- df2 %>%
+      mutate(nd_bin = factor(nd_q), sz_bin = factor(sz_q))
+  }
+
+  df2 %>%
+    group_by(model, true_class_f, nd_bin, sz_bin) %>%
+    summarise(acc = mean(correct), n = n(), .groups = "drop")
+}
+
+acc_2d <- mk_2d(df_all)
+
+p_2d <- ggplot(acc_2d, aes(nd_bin, sz_bin, fill = acc)) +
+  geom_tile(color = "white") +
+  facet_grid(true_class_f ~ model) +
+  scale_fill_viridis_c(option = "viridis", limits = c(0,1)) +
+  labs(x = expression(italic(lambda) - italic(mu)),
+       y = "Tree size (quantile bins)",
+       fill = "Accuracy",
+       title = "Where accuracy is high/low: 2D (nd × size)") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p_2d
+ggsave(file.path(write_out_path, "acc_nd_by_size_heatmap.png"), p_2d, w = 10, h = 7, dpi = 300)
+
+library(ggside)
+
+levels_sz <- levels(acc_2d$sz_bin)
+levels_nd <- levels(acc_2d$nd_bin)
+
+# Build per-panel size histogram data using the SAME bins
+ny_used <- 16
+
+# Recreate the same labeled sz_bin factor
+tmp_bins <- df_all %>%
+  mutate(sz_q = dplyr::ntile(num_nodes, ny_used)) %>%
+  group_by(sz_q) %>%
+  summarise(lo = min(num_nodes, na.rm = TRUE),
+            hi = max(num_nodes, na.rm = TRUE), .groups = "drop") %>%
+  mutate(lab = paste0("[", round(lo), ", ", round(hi), "]"))
+
+df_binned <- df_all %>%
+  mutate(
+    sz_q  = dplyr::ntile(num_nodes, ny_used),
+    sz_bin = factor(sz_q, levels = tmp_bins$sz_q, labels = tmp_bins$lab),
+    nd_bin = factor(dplyr::ntile(nd, length(levels_nd)), levels = 1:length(levels_nd), labels = levels_nd)
+  )
+
+# Histogram counts per (model, class, sz_bin)
+hist_df <- df_binned %>%
+  mutate(sz_bin = factor(sz_bin, levels = levels_sz)) %>%
+  count(model, true_class_f, sz_bin, name = "n")
+
+build_model_col <- function(model_name, hide_y = FALSE) {
+  acc_sub  <- acc_2d %>%
+    filter(model == model_name) %>%
+    mutate(
+      sz_bin = factor(sz_bin, levels = levels_sz),
+      nd_bin = factor(nd_bin, levels = levels_nd)
+    )
+
+  hist_sub <- hist_df %>%
+    filter(model == model_name) %>%
+    mutate(sz_bin = factor(sz_bin, levels = levels_sz))
+
+  p <- ggplot(acc_sub, aes(nd_bin, sz_bin, fill = acc)) +
+    geom_tile(color = "white") +
+    facet_grid(true_class_f ~ ., scales = "free_y", space = "free_y") +
+    scale_fill_viridis_c(option = "viridis", limits = c(0, 1), name = "Accuracy") +
+    labs(x = expression(italic(lambda) - italic(mu)),
+         y = "Tree size (quantile bins)",
+         title = model_name) +
+    theme_minimal(base_size = 12) +
+    theme(
+      axis.text.x  = element_text(angle = 45, hjust = 1),
+      strip.text.y = element_text(face = "bold")
+    ) +
+    ggside::geom_ysidecol(
+      data = hist_sub,
+      mapping = aes(y = sz_bin, x = n),
+      width = 0.9,
+      fill  = "grey40"
+    ) +
+    ggside::theme_ggside_minimal() +
+    ggside::scale_ysidex_continuous(trans = "log10")
+
+  if (hide_y) {
+    p <- p +
+      theme(
+        axis.text.y  = element_blank(),
+        axis.title.y = element_blank()
+      )
+  }
+  p
+}
+
+models <- unique(acc_2d$model)
+stopifnot(length(models) >= 2)
+
+p_left  <- build_model_col(models[1], hide_y = FALSE)
+p_right <- build_model_col(models[2], hide_y = TRUE)
+
+p_two_cols <- p_left + p_right + plot_layout(guides = "collect", widths = c(1, 1))
+p_two_cols
+
+ggsave(file.path(write_out_path, "acc_nd_size_heatmap_two_model_cols_with_yside_hist.png"),
+       p_two_cols, width = 12, height = 7, dpi = 300)
+
+ny_used <- 16
+sz_map <- df_all %>%
+  mutate(num_nodes = as.numeric(num_nodes),
+         sz_q = dplyr::ntile(num_nodes, ny_used)) %>%
+  group_by(sz_q) %>%
+  summarise(lo = min(num_nodes, na.rm = TRUE),
+            hi = max(num_nodes, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    lab_unique = sprintf("%02d: [%s, %s]",
+                         sz_q, format(round(lo), trim = TRUE), format(round(hi), trim = TRUE)),
+    lab_show   = sprintf("[%s, %s]", format(round(lo), trim = TRUE), format(round(hi), trim = TRUE))
+  )
+
+mk_2d_param <- function(df, xvar, nx = 8, ny = 16, sz_map) {
+  df2 <- df %>% mutate(num_nodes = as.numeric(num_nodes))
+
+  if (!"correct" %in% names(df2)) {
+    prob_mat <- as.matrix(df2 %>% dplyr::select(pd_prob, ed_prob, nnd_prob))
+    pred_idx <- max.col(prob_mat, ties.method = "first") - 1
+    df2 <- df2 %>% mutate(correct = as.integer(pred_idx == true_class))
+  }
+  if (!"true_class_f" %in% names(df2)) {
+    df2 <- df2 %>% mutate(true_class_f = factor(true_class, levels = c(0,1,2),
+                                                labels = c("PD","ED","NND")))
+  }
+
+  df2 <- df2 %>%
+    mutate(
+      x_q  = dplyr::ntile(.data[[xvar]], nx),
+      sz_q = dplyr::ntile(num_nodes, ny)
+    )
+
+  x_map <- df2 %>%
+    group_by(x_q) %>%
+    summarise(lo = min(.data[[xvar]], na.rm = TRUE),
+              hi = max(.data[[xvar]], na.rm = TRUE), .groups = "drop") %>%
+    mutate(
+      x_lab_unique = sprintf("%02d: [%.6f, %.6f]", x_q, lo, hi),
+      x_lab_show   = sprintf("[%.6f, %.6f]", lo, hi)
+    )
+
+  acc <- df2 %>%
+    left_join(x_map,  by = "x_q") %>%
+    left_join(sz_map, by = "sz_q") %>%
+    mutate(
+      x_bin  = factor(x_lab_unique, levels = x_map$x_lab_unique),
+      sz_bin = factor(lab_unique,   levels = sz_map$lab_unique)
+    ) %>%
+    group_by(model, true_class_f, x_bin, sz_bin) %>%
+    summarise(acc = mean(correct), n = n(), .groups = "drop")
+
+  list(acc = acc, x_map = x_map, sz_map = sz_map)
+}
+
+build_model_col_param <- function(acc_obj, model_name, param_title,
+                                  hide_y_axis = FALSE, show_right_strips = FALSE) {
+  acc_tbl <- acc_obj$acc %>%
+    filter(model == model_name) %>%
+    mutate(
+      x_bin  = factor(x_bin,  levels = levels(x_bin)),
+      sz_bin = factor(sz_bin, levels = levels(sz_bin))
+    )
+
+  x_lab_map <- setNames(acc_obj$x_map$x_lab_show, acc_obj$x_map$x_lab_unique)
+  y_lab_map <- setNames(acc_obj$sz_map$lab_show,  acc_obj$sz_map$lab_unique)
+
+  p <- ggplot(acc_tbl, aes(x_bin, sz_bin, fill = acc)) +
+    geom_tile(color = "white") +
+    ggfittext::geom_fit_text(aes(label = n),
+                             contrast = TRUE, grow = TRUE, reflow = FALSE, padding.x = unit(1, "pt"),
+                             padding.y = unit(1, "pt")) +
+    facet_grid(true_class_f ~ ., scales = "free_y", space = "free_y") +
+    scale_fill_viridis_c(option = "viridis", limits = c(0, 1), name = "Accuracy") +
+    scale_x_discrete(labels = x_lab_map) +
+    scale_y_discrete(labels = y_lab_map) +
+    labs(x = NULL, y = if (hide_y_axis) NULL else "Tree size (quantile bins)", title = param_title) +
+    theme_minimal(base_size = 12) +
+    theme(
+      axis.text.x  = element_text(angle = 45, hjust = 1),
+      axis.title.x = element_blank(),
+      strip.text.y = if (show_right_strips) element_text(face = "bold") else element_blank()
+    )
+
+  if (hide_y_axis) {
+    p <- p + theme(axis.text.y = element_blank(), axis.title.y = element_blank())
+  }
+  p
+}
+
+# compute accuracy tables for β_N and β_Φ
+acc_beta_n   <- mk_2d_param(df_all, xvar = "beta_n",  nx = 8, ny = ny_used, sz_map = sz_map)
+acc_beta_phi <- mk_2d_param(df_all, xvar = "beta_phi", nx = 8, ny = ny_used, sz_map = sz_map)
+
+models <- unique(acc_beta_n$acc$model); stopifnot(length(models) >= 2)
+
+p_left_bn   <- build_model_col_param(acc_beta_n,   models[1], expression("GNN:"~italic(beta)[N]),
+                                     hide_y_axis = FALSE, show_right_strips = FALSE)
+p_left_bph  <- build_model_col_param(acc_beta_phi, models[1], expression("GNN:"~italic(beta)[Phi]),
+                                     hide_y_axis = TRUE,  show_right_strips = FALSE)
+
+p_right_bn  <- build_model_col_param(acc_beta_n,   models[2], expression("LSTM:"~italic(beta)[N]),
+                                     hide_y_axis = TRUE,  show_right_strips = FALSE)
+p_right_bph <- build_model_col_param(acc_beta_phi, models[2], expression("LSTM:"~italic(beta)[Phi]),
+                                     hide_y_axis = TRUE,  show_right_strips = TRUE)
+
+p_four_cols <- p_left_bn + p_left_bph + p_right_bn + p_right_bph +
+  plot_layout(guides = "collect", widths = c(1, 1, 1, 1))
+
+p_four_cols
+ggsave(file.path(write_out_path, "acc_size_vs_pars.pdf"),
+       p_four_cols, width = 12, height = 8, dpi = 600)
+
+prepare_for_cal <- function(df) {
+  par_cols_main <- c("lambda", "mu",
+                     "beta_n", "beta_phi",
+                     "gamma_n", "gamma_phi")
+
+  to_num <- function(x) {
+    if (is.numeric(x)) return(x)
+    suppressWarnings(as.numeric(as.character(x)))
+  }
+
+  prob_mat <- as.matrix(df %>% dplyr::select(pd_prob, ed_prob, nnd_prob))
+  pred_idx <- max.col(prob_mat, ties.method = "first") - 1L
+
+  df2 <- df %>%
+    mutate(
+      pred_class   = pred_idx,
+      correct      = as.integer(pred_class == true_class),
+      maxp         = pmax(pd_prob, ed_prob, nnd_prob),
+      size_cat     = case_when(
+        num_nodes <= 200 ~ "Small",
+        num_nodes <= 500 ~ "Medium",
+        TRUE             ~ "Large"
+      ),
+      size_cat = factor(size_cat,
+                        levels = c("Small", "Medium", "Large")),
+      true_class_f = factor(true_class,
+                            levels = c(0, 1, 2),
+                            labels = c("PD", "ED", "NND"))
+    ) %>%
+    mutate(across(any_of(par_cols_main), to_num))
+
+  if ("nd" %in% names(df2)) {
+    df2 <- df2 %>% mutate(nd = to_num(nd))
+  } else if (all(c("lambda", "mu") %in% names(df2))) {
+    df2 <- df2 %>% mutate(nd = lambda - mu)
+  } else {
+    df2 <- df2 %>% mutate(nd = NA_real_)
+  }
+
+  df2
+}
+
+df_gnn_lstm <- bind_rows(
+  prepare_for_cal(data_list_gnn_lstm$GNN)  %>% mutate(model = "GNN",  n_pars = 6L),
+  prepare_for_cal(data_list_gnn_lstm$LSTM) %>% mutate(model = "LSTM", n_pars = 6L)
+)
+
+df_cplx_gnn <- bind_rows(
+  prepare_for_cal(data_list_n_pars$MEDIUM) %>%
+    mutate(model = "GNN", n_pars = 4L, complexity = "Medium"),
+  prepare_for_cal(data_list_n_pars$HIGH) %>%
+    mutate(model = "GNN", n_pars = 6L, complexity = "High")
+) %>%
+  mutate(complexity = factor(complexity, levels = c("Medium", "High")))
+
+df_pars <- df_gnn_lstm
+
+make_cal_df <- function(df, group_var,
+                        prob_breaks = seq(0, 1, by = 0.1),
+                        min_n_bin = 1L) {
+  gv <- rlang::enquo(group_var)
+
+  df %>%
+    mutate(prob_bin = cut(maxp,
+                          breaks = prob_breaks,
+                          include.lowest = TRUE,
+                          right = FALSE)) %>%
+    group_by(!!gv, prob_bin) %>%
+    summarise(
+      conf = mean(maxp),
+      obs  = mean(correct),
+      n    = n(),
+      .groups = "drop"
+    ) %>%
+    filter(n >= min_n_bin) %>%
+    rename(curve = !!gv)
+}
+
+compute_ece <- function(cal_df) {
+  cal_df %>%
+    group_by(curve) %>%
+    summarise(
+      ECE = {
+        n_tot <- sum(n)
+        if (n_tot == 0) NA_real_ else sum((n / n_tot) * abs(obs - conf))
+      },
+      .groups = "drop"
+    )
+}
+
+# NOTE: unified y-axis via ece_ymax; preserve curve order
+plot_cal_panel_with_ece <- function(cal_df,
+                                    title,
+                                    xlab      = "Predicted confidence",
+                                    ylab      = "Observed accuracy",
+                                    ece_ylab  = "ECE",
+                                    colors    = NULL,
+                                    ece_ymax  = NULL) {
+
+  # preserve existing curve order
+  curve_levels <- unique(cal_df$curve)
+  cal_df <- cal_df %>%
+    mutate(curve = factor(curve, levels = curve_levels))
+
+  ece_df <- compute_ece(cal_df) %>%
+    mutate(curve = factor(curve, levels = curve_levels))
+
+  if (is.null(colors)) {
+    n_curves <- length(curve_levels)
+    colors <- scales::hue_pal()(n_curves)
+    names(colors) <- curve_levels
+  } else {
+    colors <- colors[curve_levels]
+  }
+
+  p_main <- ggplot(cal_df,
+                   aes(x = conf, y = obs,
+                       color = curve, group = curve)) +
+    geom_abline(slope = 1, intercept = 0,
+                linetype = "dashed", colour = "grey50") +
+    geom_line() +
+    geom_point() +
+    coord_equal(xlim = c(0, 1), ylim = c(0, 1)) +
+    labs(
+      title = title,
+      x     = xlab,
+      y     = ylab
+    ) +
+    scale_color_manual(values = colors) +
+    theme(
+      legend.position  = "none",
+      panel.background = element_blank()
+    )
+
+  p_ece <- ggplot(ece_df,
+                  aes(x = curve, y = ECE, fill = curve)) +
+    geom_col(width = 0.7) +
+    scale_fill_manual(values = colors) +
+    labs(x = NULL, y = ece_ylab) +
+    theme_minimal(base_size = 10) +
+    theme(
+      legend.position    = "none",
+      axis.text.x        = element_text(angle = 45,
+                                        hjust = 1,
+                                        vjust = 1),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor   = element_blank()
+    )
+
+  if (!is.null(ece_ymax) && is.finite(ece_ymax) && ece_ymax > 0) {
+    p_ece <- p_ece + coord_cartesian(ylim = c(0, ece_ymax))
+  }
+
+  p_main / p_ece + plot_layout(heights = c(5, 1))
+}
+
+build_param_cal <- function(df, var_name, ranges, panel_label, digits = 3) {
+  v  <- rlang::sym(var_name)
+  lows  <- vapply(ranges, function(r) r[1], numeric(1))
+  highs <- vapply(ranges, function(r) r[2], numeric(1))
+
+  breaks <- c(lows[1], highs)
+  lab_fun <- function(lo, hi)
+    sprintf("[%.*f, %.*f)", digits, lo, digits, hi)
+  labels <- lab_fun(lows, highs)
+
+  df %>%
+    mutate(
+      param_bin = cut(!!v,
+                      breaks = breaks,
+                      include.lowest = TRUE,
+                      labels = labels)
+    ) %>%
+    filter(!is.na(param_bin)) %>%
+    make_cal_df(param_bin) %>%
+    mutate(curve = as.character(curve),
+           panel = panel_label)
+}
+
+beta_n_ranges <- list(c(-0.05, -0.04), c(-0.04, -0.03), c(-0.03, -0.02),
+                      c(-0.02, -0.01), c(-0.01,  0.00))
+
+beta_phi_ranges <- list(c(-0.05, -0.04), c(-0.04, -0.03), c(-0.03, -0.02),
+                        c(-0.02, -0.01), c(-0.01,  0.00), c(0.00, 0.01),
+                        c(0.01,  0.02),  c(0.02,  0.03), c(0.03, 0.04),
+                        c(0.04,  0.05))
+
+build_all_panels_for_model <- function(model_name) {
+
+  df_model <- df_gnn_lstm %>% filter(model == model_name)
+
+  cal_overall <- df_model %>%
+    mutate(all_trees = "All trees") %>%
+    make_cal_df(all_trees)
+
+  cal_scen <- df_model %>%
+    make_cal_df(true_class_f)
+
+  if (model_name == "GNN") {
+    df_cplx_model <- df_cplx_gnn
+  } else if (model_name == "LSTM") {
+    df_cplx_model <- df_cplx_lstm
+  } else {
+    stop("Unknown model name in complexity panel.")
+  }
+
+  cal_cplx <- df_cplx_model %>%
+    make_cal_df(complexity)
+
+  cal_size <- df_model %>%
+    make_cal_df(size_cat)
+
+  df_pars_model <- df_pars %>% filter(model == model_name)
+
+  cal_beta_n   <- build_param_cal(df_pars_model, "beta_n",
+                                  beta_n_ranges,   "β_N")
+  cal_beta_phi <- build_param_cal(df_pars_model, "beta_phi",
+                                  beta_phi_ranges, "β_Φ")
+
+  ece_max <- max(
+    compute_ece(cal_overall)$ECE,
+    compute_ece(cal_scen)$ECE,
+    compute_ece(cal_cplx)$ECE,
+    compute_ece(cal_size)$ECE,
+    compute_ece(cal_beta_n)$ECE,
+    compute_ece(cal_beta_phi)$ECE,
+    na.rm = TRUE
+  )
+
+  scen_cols <- c("PD" = "#1b9e77", "ED" = "#d95f02", "NND" = "#7570b3")
+  cplx_cols <- c("Medium" = "#e41a1c", "High" = "#377eb8")
+  size_cols <- c("Small" = "#4daf4a",
+                 "Medium" = "#984ea3",
+                 "Large" = "#ff7f00")
+
+  p_overall <- plot_cal_panel_with_ece(
+    cal_overall,
+    title    = paste(model_name, "- Overall reliability"),
+    colors   = c("All trees" = "black"),
+    ece_ymax = ece_max
+  )
+
+  p_scen <- plot_cal_panel_with_ece(
+    cal_scen,
+    title    = paste(model_name, "- Reliability by scenario"),
+    colors   = scen_cols,
+    ece_ymax = ece_max
+  )
+
+  p_cplx <- plot_cal_panel_with_ece(
+    cal_cplx,
+    title    = paste(model_name, "- Reliability by complexity"),
+    colors   = cplx_cols,
+    ece_ymax = ece_max
+  )
+
+  p_size <- plot_cal_panel_with_ece(
+    cal_size,
+    title    = paste(model_name, "- Reliability by tree size"),
+    colors   = size_cols,
+    ece_ymax = ece_max
+  )
+
+  p_beta_n <- plot_cal_panel_with_ece(
+    cal_beta_n,
+    title    = bquote(.(model_name) ~ "- Reliability by" ~ beta[N]),
+    colors   = NULL,
+    ece_ymax = ece_max
+  )
+
+  p_beta_phi <- plot_cal_panel_with_ece(
+    cal_beta_phi,
+    title    = bquote(.(model_name) ~ "- Reliability by" ~ beta[Phi]),
+    colors   = NULL,
+    ece_ymax = ece_max
+  )
+
+  (p_overall | p_scen | p_cplx) /
+    (p_size    | p_beta_n | p_beta_phi)
+}
+
+p_reliability_gnn  <- build_all_panels_for_model("GNN")
+p_reliability_lstm <- build_all_panels_for_model("LSTM")
+
+ggsave(
+  file.path(write_out_path, "reliability_multi_panel_GNN.pdf"),
+  p_reliability_gnn,
+  width  = 12,
+  height = 11,
+  dpi    = 600
+)
+
+ggsave(
+  file.path(write_out_path, "reliability_multi_panel_LSTM.pdf"),
+  p_reliability_lstm,
+  width  = 12,
+  height = 10,
+  dpi    = 600
+)
+
+```
+
+Figure Group Extra 1: Parameter density
+
+```{r}
+pars <- c("lambda","mu","beta_n","beta_phi","gamma_n","gamma_phi")
+
+df_long <- df_complete %>%
+  dplyr::select(all_of(pars), cplx, label) %>%
+  pivot_longer(all_of(pars), names_to = "param", values_to = "value")
+
+# Title-case group labels
+df_plot <- bind_rows(
+  df_long %>% mutate(group = "All"),
+  df_long %>% mutate(group = label)
+) %>%
+  mutate(group = fct_relevel(group, "All"))
+
+# Parse-able plotmath labels
+param_labs_expr <- c(
+  lambda     = "lambda",
+  mu         = "mu",
+  beta_n     = "beta[N]",
+  beta_phi   = "beta[Phi]",
+  gamma_n    = "gamma[N]",
+  gamma_phi  = "gamma[Phi]"
+)
+
+param_order <- c("lambda","mu","beta_n","beta_phi","gamma_n","gamma_phi")
+df_plot <- df_plot %>%
+  mutate(param = factor(param, levels = param_order),
+         param_lab = param_labs_expr[as.character(param)])
+
+group_levels <- c("pd", "ed", "nnd", "All")                # desired order
+group_labs    <- c(pd = "PD", ed = "ED", nnd = "NND", All = "All")  # y-axis labels
+fill_vals     <- c(pd = "#ffe990", ed = "#7381f1", nnd = "#f59999", All = "gray")  # fixed mapping
+
+df_plot <- df_plot %>%
+  mutate(
+    group = factor(group, levels = group_levels)
+  )
+
+ridge_one_param <- function(pcode) {
+  d <- df_plot %>% dplyr::filter(param == pcode)
+
+  ggplot(d, aes(x = value, y = group, fill = group)) +
+    geom_density_ridges(
+      scale = 1.05,
+      rel_min_height = 0.003,
+      quantile_lines = TRUE,
+      quantiles = 0.5
+    ) +
+    scale_fill_manual(
+      name   = "Scn",
+      values = fill_vals,
+      breaks = group_levels,
+      limits = group_levels
+    ) +
+    scale_y_discrete(labels = group_labs) +
+    guides(fill = "none") +
+    labs(
+      title = parse(text = param_labs_expr[[pcode]])[[1]],
+      x = NULL, y = NULL
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      panel.grid.minor = element_blank(),
+      axis.text.y = element_text(size = 8)
+    )
+}
+
+ridge_plots <- lapply(param_order, ridge_one_param)
+
+plot_params_dist_ridges <- wrap_plots(ridge_plots, ncol = 3) +
+  plot_annotation(title = "Parameter distributions") &
+  theme(plot.title = element_text(face = "bold"))
+
+plot_params_dist_ridges
+
+```
+
+Figure Group Extra 2: Illustration of non-identifiability
+```{r}
+set.seed(42)
+ggthemr::ggthemr("flat")
+
+cols     <- c("#1f9ac9", "#f1a340", "#8c510a")  # blue, amber, brown
+dash_col <- "#8b5cf6"                           # violet for smoothers
+pt_shape <- 8                                   # asterisk
+theta0   <- 0.6                                 # reference level
+
+n <- 80
+
+# High signal (identifiable)
+T1     <- runif(n, 0, 1)
+theta1 <- 1.2 - 1.1 * T1 + rnorm(n, 0, 0.07)
+
+# Partial signal (noisy)
+T2     <- runif(n, 0, 1)
+theta2 <- 0.9 - 0.7 * plogis((T2 - 0.5) * 8) + rnorm(n, 0, 0.12)
+
+# Little information (≈ conditional mean)
+T3     <- runif(n, 0, 1)
+theta3 <- 0.6 + rnorm(n, 0, 0.18)
+
+df1 <- tibble(T = T1, theta = theta1)
+df2 <- tibble(T = T2, theta = theta2)
+df3 <- tibble(T = T3, theta = theta3)
+
+fit1 <- loess(theta ~ T, data = df1, span = 0.8)
+fit2 <- loess(theta ~ T, data = df2, span = 0.8)
+fit3 <- loess(theta ~ T, data = df3, span = 0.8)
+
+df1 <- df1 %>%
+  mutate(theta_hat = predict(fit1, newdata = df1),
+         err       = theta - theta_hat)
+
+df2 <- df2 %>%
+  mutate(theta_hat = predict(fit2, newdata = df2),
+         err       = theta - theta_hat)
+
+df3 <- df3 %>%
+  mutate(theta_hat = predict(fit3, newdata = df3),
+         err       = theta - theta_hat)
+
+base_axes <- list(
+  labs(x = expression(italic(T)), y = expression(theta)),
+  coord_cartesian(expand = FALSE),
+  theme(
+    panel.background = element_blank()
+  )
+)
+
+p1 <- ggplot(df1, aes(T, theta)) +
+  geom_hline(yintercept = theta0, linetype = "dotted") +
+  geom_point(shape = pt_shape, size = 2.8, color = cols[1]) +
+  geom_smooth(method = "loess", se = FALSE, linetype = "22",
+              linewidth = 1.1, color = dash_col, span = 0.8) +
+  ggtitle("High signal (identifiable)") +
+  base_axes
+
+p2 <- ggplot(df2, aes(T, theta)) +
+  geom_hline(yintercept = theta0, linetype = "dotted") +
+  geom_point(shape = pt_shape, size = 2.8, color = cols[2]) +
+  geom_smooth(method = "loess", se = FALSE, linetype = "22",
+              linewidth = 1.1, color = dash_col, span = 0.8) +
+  ggtitle("Partial signal (noisy)") +
+  base_axes
+
+p3 <- ggplot(df3, aes(T, theta)) +
+  geom_hline(yintercept = theta0, linetype = "dotted") +
+  geom_point(shape = pt_shape, size = 2.8, color = cols[3]) +
+  geom_smooth(method = "loess", se = FALSE, linetype = "22",
+              linewidth = 1.1, color = dash_col, span = 0.8) +
+  ggtitle("Little information (≈ conditional mean)") +
+  base_axes
+
+top_row <- p1 + p2 + p3 + plot_layout(ncol = 3)
+
+base_err <- list(
+  labs(x = expression(theta), y = expression(theta - hat(theta))),
+  coord_cartesian(expand = FALSE),
+  theme(
+    panel.background = element_blank()
+  )
+)
+
+p1_err <- ggplot(df1, aes(theta, err)) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = theta0, linetype = "dotted") +
+  geom_point(shape = pt_shape, size = 2.8, color = cols[1]) +
+  ggtitle("Error vs θ (identifiable)") +
+  base_err
+
+p2_err <- ggplot(df2, aes(theta, err)) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = theta0, linetype = "dotted") +
+  geom_point(shape = pt_shape, size = 2.8, color = cols[2]) +
+  ggtitle("Error vs θ (noisy)") +
+  base_err
+
+p3_err <- ggplot(df3, aes(theta, err)) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = theta0, linetype = "dotted") +
+  geom_point(shape = pt_shape, size = 2.8, color = cols[3]) +
+  ggtitle("Error vs θ (≈ no signal)") +
+  base_err
+
+second_row <- p1_err + p2_err + p3_err + plot_layout(ncol = 3)
+
+make_rep_clouds <- function(sd_pd, sd_ed, sd_nnd, label) {
+  n_per <- 60
+
+  tibble(
+    scenario = rep(c("PD", "ED", "NND"), each = n_per),
+    x = c(
+      rnorm(n_per, -1.2, sd_pd),   # PD centre
+      rnorm(n_per,  1.2, sd_ed),   # ED centre
+      rnorm(n_per,  0.0, sd_nnd)   # NND centre
+    ),
+    y = c(
+      rnorm(n_per,  1.0, sd_pd),
+      rnorm(n_per,  1.0, sd_ed),
+      rnorm(n_per, -0.8, sd_nnd)
+    ),
+    setting = label
+  )
+}
+
+# Strong ER, moderate richness
+rep_strong <- make_rep_clouds(sd_pd = 0.25, sd_ed = 0.25, sd_nnd = 0.25,
+                              label = "Strong ER, moderate richness")
+
+# Intermediate, partial overlap
+rep_partial <- make_rep_clouds(sd_pd = 0.6, sd_ed = 0.6, sd_nnd = 0.6,
+                               label = "Moderate ER and richness")
+
+# Typical parameter ranges, heavy overlap in the center
+rep_typical <- make_rep_clouds(sd_pd = 1.0, sd_ed = 1.0, sd_nnd = 1.0,
+                               label = "Typical parameter ranges")
+
+rep_all <- bind_rows(rep_strong, rep_partial, rep_typical)
+
+scenario_cols <- c(PD = "#fed976", ED = "#3182bd", NND = "#de2d26")
+
+p_rep1 <- rep_all %>%
+  filter(setting == "Strong ER, moderate richness") %>%
+  ggplot(aes(x, y, colour = scenario)) +
+  geom_point(size = 2.2, alpha = 0.8) +
+  scale_colour_manual(values = scenario_cols, name = "Scenario") +
+  labs(x = NULL, y = "Latent dimension 2") +
+  ggtitle("Separated clouds\n(strong ER, moderate richness)") +
+  theme(
+    panel.background = element_blank()
+  )
+
+p_rep2 <- rep_all %>%
+  filter(setting == "Moderate ER and richness") %>%
+  ggplot(aes(x, y, colour = scenario)) +
+  geom_point(size = 2.2, alpha = 0.8) +
+  scale_colour_manual(values = scenario_cols, name = "Scenario") +
+  labs(x = "Latent dimension 1", y = NULL) +
+  ggtitle("Partially overlapping clouds\n(moderate ER, moderate richness)") +
+  theme(
+    panel.background = element_blank()
+  )
+
+p_rep3 <- rep_all %>%
+  filter(setting == "Typical parameter ranges") %>%
+  ggplot(aes(x, y, colour = scenario)) +
+  geom_point(size = 2.2, alpha = 0.8) +
+  scale_colour_manual(values = scenario_cols, name = "Scenario") +
+  labs(x = NULL, y = NULL) +
+  ggtitle("Strongly overlapping clouds\n(typical simulations)") +
+  theme(
+    panel.background = element_blank()
+  )
+
+third_row <- p_rep1 + p_rep2 + p_rep3 + plot_layout(ncol = 3)
+
+fig_complexity_full <- wrap_plots(p1, p2, p3, p1_err, p2_err, p3_err, p_rep1, p_rep2, p_rep3) +
+  plot_layout(nrow = 3, guides = "collect", axis_titles = "collect")
+
+ggsave(file.path(write_out_path, "complexity_signal_panels_full.png"),
+       fig_complexity_full, width = 15, height = 12, dpi = 600)
+
+fig_complexity_full
+
+
+```
+
+Code to batch save the plots to disk.
+```{r}
+# Constants for outputs
+dpi_print = "print"
+unit_print = "in"
+width_print_group_1 = 12
+height_print_group_1 = 12
+width_print_group_1_2 = 14
+height_print_group_1_2 = 8
+width_print_group_2 = 12
+height_print_group_2 = 6
+width_print_group_3 = 18
+height_print_group_3 = 6
+width_print_group_ex_1 = 12
+height_print_group_ex_1 = 8
+
+write_out_path <- file.path(result_path, "FORMAL-PLOT")
+if (!dir.exists(write_out_path)) {
+  dir.create(write_out_path)
+}
+
+# Some newer figures are not included in the below code block
+# Save figure group 1
+ggsave(file.path(write_out_path, "comp_nd.png"), plot_output_comp_nd, width = width_print_group_1, height = height_print_group_1, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "comp_nd_cnt.png"), plot_output_comp_nd_cnt, width = width_print_group_1, height = height_print_group_1, units = unit_print, dpi = dpi_print)
+
+ggsave(file.path(write_out_path, "comp_beta_n.png"), plot_output_comp_beta_n, width = width_print_group_1, height = height_print_group_1, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "comp_beta_n_cnt.png"), plot_output_comp_beta_n_cnt, width = width_print_group_1, height = height_print_group_1, units = unit_print, dpi = dpi_print)
+
+ggsave(file.path(write_out_path, "comp_beta_phi.png"), plot_output_comp_beta_phi, width = width_print_group_1, height = height_print_group_1, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "comp_beta_phi_cnt.png"), plot_output_comp_beta_phi_cnt, width = width_print_group_1, height = height_print_group_1, units = unit_print, dpi = dpi_print)
+
+ggsave(file.path(write_out_path, "comp_gamma_n.png"), plot_output_comp_gamma_n, width = width_print_group_1, height = height_print_group_1, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "comp_gamma_n_cnt.png"), plot_output_comp_gamma_n_cnt, width = width_print_group_1, height = height_print_group_1, units = unit_print, dpi = dpi_print)
+
+ggsave(file.path(write_out_path, "comp_gamma_phi.png"), plot_output_comp_gamma_phi, width = width_print_group_1, height = height_print_group_1, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "comp_gamma_phi_cnt.png"), plot_output_comp_gamma_phi_cnt, width = width_print_group_1, height = height_print_group_1, units = unit_print, dpi = dpi_print)
+
+# Save figure group 1-2
+ggsave(file.path(write_out_path, "alignment_nd.png"), alignment_nd, width = width_print_group_1_2, height = height_print_group_1_2, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "alignment_beta_n.png"), alignment_beta_n, width = width_print_group_1_2, height = height_print_group_1_2, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "alignment_beta_phi.png"), alignment_beta_phi, width = width_print_group_1_2, height = height_print_group_1_2, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "alignment_gamma_n.png"), alignment_gamma_n, width = width_print_group_1_2, height = height_print_group_1_2, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "alignment_gamma_phi.png"), alignment_gamma_phi, width = width_print_group_1_2, height = height_print_group_1_2, units = unit_print, dpi = dpi_print)
+
+# Save figure group 2
+ggsave(file.path(write_out_path, "impact_nd.png"), plot_output_impact_nd, width = width_print_group_2, height = height_print_group_2, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "impact_beta_n.png"), plot_output_impact_beta_n, width = width_print_group_2, height = height_print_group_2, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "impact_beta_phi.png"), plot_output_impact_beta_phi, width = width_print_group_2, height = height_print_group_2, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "impact_gamma_n.png"), plot_output_impact_gamma_n, width = width_print_group_2, height = height_print_group_2, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "impact_gamma_phi.png"), plot_output_impact_gamma_phi, width = width_print_group_2, height = height_print_group_2, units = unit_print, dpi = dpi_print)
+
+# Save figure group 3
+ggsave(file.path(write_out_path, "misspec_nd.pdf"), plot_output_misspec_nd, width = width_print_group_3, height = height_print_group_3, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "misspec_beta_n.pdf"), plot_output_misspec_beta_n, width = width_print_group_3, height = height_print_group_3, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "misspec_beta_phi.pdf"), plot_output_misspec_beta_phi, width = width_print_group_3, height = height_print_group_3, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "misspec_gamma_n.pdf"), plot_output_misspec_gamma_n, width = width_print_group_3, height = height_print_group_3, units = unit_print, dpi = dpi_print)
+ggsave(file.path(write_out_path, "misspec_gamma_phi.pdf"), plot_output_misspec_gamma_phi, width = width_print_group_3, height = height_print_group_3, units = unit_print, dpi = dpi_print)
+
+# Save figure group extra 1
+ggsave(file.path(write_out_path, "params_dist.png"), plot_params_dist_ridges, width = width_print_group_ex_1, height = height_print_group_ex_1, units = unit_print, dpi = dpi_print)
+
+```
